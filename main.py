@@ -41,6 +41,21 @@ if os.path.exists(_fonts_src):
 else:
     print(f"⚠️ fonts source not found: {_fonts_src}")
 
+COOKIE_FILE_PATH = "/tmp/cookies.txt"
+
+def init_cookies():
+    cookies_env = os.environ.get("YOUTUBE_COOKIES")
+    if cookies_env:
+        try:
+            with open(COOKIE_FILE_PATH, "w", encoding="utf-8") as f:
+                f.write(cookies_env.strip())
+            with open("cookies.txt", "w", encoding="utf-8") as f:
+                f.write(cookies_env.strip())
+            print("🔑 cookies.txt written from YOUTUBE_COOKIES env variable.", flush=True)
+        except Exception as e:
+            print(f"⚠️ Failed to write cookies from env: {e}", flush=True)
+
+init_cookies()
 
 # Global model variable for lazy loading
 whisper_model = None
@@ -428,8 +443,8 @@ def download_youtube_audio_server(youtube_url: str, task_dir: str) -> str:
         pass
 
     cookies_path = None
-    for candidate in ["cookies.txt", "coolies2.txt", "cookies2.txt", "www.youtube.com_cookies (1).txt"]:
-        if os.path.exists(candidate):
+    for candidate in [COOKIE_FILE_PATH, "cookies.txt", "coolies2.txt", "cookies2.txt", "www.youtube.com_cookies (1).txt"]:
+        if os.path.exists(candidate) and os.path.getsize(candidate) > 0:
             cookies_path = candidate
             break
 
