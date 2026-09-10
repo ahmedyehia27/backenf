@@ -2210,7 +2210,7 @@ async def run_render_task(task_id: str, request_data: RenderRequest):
             json.dump(dump_data, f, ensure_ascii=False, indent=2)
             
         output_video_path = os.path.join(task_dir, "output.mp4")
-        concurrency_val = str(min(os.cpu_count() or 4, 8))
+        concurrency_val = "4"
         
         # Always render directly from src/index.ts to avoid Remotion bundle public folder isolation
         render_entry = "src/index.ts"
@@ -2533,7 +2533,7 @@ async def generate_video(
             
         # 4. Render Video using Remotion CLI
         output_video_path = os.path.join(task_dir, "output.mp4")
-        concurrency_val = str(min(os.cpu_count() or 4, 8))
+        concurrency_val = "4"
         
         # Always render directly from src/index.ts to avoid Remotion bundle public folder isolation
         render_entry = "src/index.ts"
