@@ -1,4 +1,4 @@
-import { Audio, Video, useCurrentFrame, useVideoConfig, staticFile } from 'remotion';
+import { Audio, OffthreadVideo, useCurrentFrame, useVideoConfig, staticFile } from 'remotion';
 import React from 'react';
 import { loadFont as loadCairo } from '@remotion/google-fonts/Cairo';
 import { loadFont as loadTajawal } from '@remotion/google-fonts/Tajawal';
@@ -75,7 +75,10 @@ const buildCaptionTextStyle = (
   };
 };
 
-// ClassicAnimation component: traditional style with no motion, simple outline stroke
+// Helper: Detect if word contains Latin/English characters to render in isolated LTR flow
+const isEnglishOrLatinWord = (str: string): boolean => /[a-zA-Z]/.test(str);
+
+// ClassicAnimation component: word-by-word active color pop (instant)
 const ClassicAnimation: React.FC<{
   segment: CaptionSegment;
   currentTime: number;
@@ -106,12 +109,15 @@ const ClassicAnimation: React.FC<{
         const isActive = currentTime >= w.start && currentTime <= w.end;
         const color = isActive ? (activeColor || '#FFFFFF') : (inactiveColor || '#FFFFFF');
         const computedStyle = buildCaptionTextStyle(color, strokeColor, strokeWidth, shadowColor, shadowBlur);
+        const isEng = isEnglishOrLatinWord(w.word);
 
         return (
           <span
             key={index}
+            dir={isEng ? 'ltr' : 'rtl'}
             style={{
               display: 'inline-block',
+              unicodeBidi: 'isolate',
               ...computedStyle,
             }}
           >
@@ -155,6 +161,7 @@ const RevealAnimation: React.FC<{
         const isPast = currentTime > w.end;
         const color = isActive ? (activeColor || '#FFFFFF') : (inactiveColor || '#FFFFFF');
         const computedStyle = buildCaptionTextStyle(color, strokeColor, strokeWidth, shadowColor, shadowBlur);
+        const isEng = isEnglishOrLatinWord(w.word);
         
         let translateY = 0;
         let opacity = 1;
@@ -182,8 +189,10 @@ const RevealAnimation: React.FC<{
         return (
           <span
             key={index}
+            dir={isEng ? 'ltr' : 'rtl'}
             style={{
               display: 'inline-block',
+              unicodeBidi: 'isolate',
               ...computedStyle,
               transform: `translateY(${translateY}px)`,
               opacity,
@@ -251,12 +260,15 @@ const SlideAnimation: React.FC<{
           const isActive = currentTime >= w.start && currentTime <= w.end;
           const color = isActive ? (activeColor || '#FFFFFF') : (inactiveColor || '#FFFFFF');
           const computedStyle = buildCaptionTextStyle(color, strokeColor, strokeWidth, shadowColor, shadowBlur);
+          const isEng = isEnglishOrLatinWord(w.word);
 
           return (
             <span
               key={index}
+              dir={isEng ? 'ltr' : 'rtl'}
               style={{
                 display: 'inline-block',
+                unicodeBidi: 'isolate',
                 ...computedStyle,
               }}
             >
@@ -269,42 +281,39 @@ const SlideAnimation: React.FC<{
   );
 };
 
-// TikTok-style or Centered rectangular Title Overlay
 const TitleOverlay: React.FC<{
   titleText: string;
-  titleSubtext?: string;
-  titleColor: string;
-  titleBgColor: string;
+  titleColor?: string;
+  titleBgColor?: string;
   titleDuration: number;
   titleTop: number;
   titleStyle?: string;
   frame: number;
   fps: number;
   fontFamily: string;
-}> = ({ titleText, titleSubtext, titleColor, titleBgColor, titleDuration, titleTop, titleStyle = 'tiktok-pill', frame, fps, fontFamily }) => {
+}> = ({ titleText, titleColor = '#FFFFFF', titleBgColor = '#000000', titleDuration, titleTop, titleStyle = 'split-contrast', frame, fps, fontFamily }) => {
   const endFrame = (titleDuration && titleDuration > 0) ? Math.ceil(titleDuration * fps) : 999999;
   if (endFrame < 999000 && frame > endFrame) return null;
 
   const inDur  = Math.min(12, Math.floor(fps * 0.35)); // ~0.35s in
   const outDur = Math.min(10, Math.floor(fps * 0.28)); // ~0.28s out
 
-  // Ease-out cubic helper
-  const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
-  const easeIn  = (t: number) => Math.pow(t, 2);
+  // Fast start, smooth deceleration ease-out curve
+  const easeOutCubic = (t: number) => 1 - Math.pow(1 - t, 3);
+  const easeIn = (t: number) => Math.pow(t, 2);
 
   let opacity    = 1;
   let translateY = 0;
   let scale      = 1;
 
   if (frame < inDur) {
-    const t = easeOut(frame / inDur);
+    const t = easeOutCubic(frame / inDur);
     opacity    = t;
     if (titleStyle === 'centered-rect') {
       scale      = 0.7 + 0.3 * t; // pops in from 70% scale
       translateY = 15 * (1 - t);
     } else {
-      scale      = 0.88 + 0.12 * t;
-      translateY = 40 * (1 - t);   // slides UP from below
+      translateY = 35 * (1 - t);   // crisp slide UP from below
     }
   } else if (frame > endFrame - outDur) {
     const t = easeIn((endFrame - frame) / outDur);
@@ -312,6 +321,36 @@ const TitleOverlay: React.FC<{
     translateY = -20 * (1 - t);  // drifts up slightly on exit
     scale      = 0.92 + 0.08 * t;
   }
+
+  // Auto split logic for 'split-contrast' style (or split if newline is present)
+  let splitLine1 = titleText;
+  let splitLine2: string | null = null;
+
+  if ((titleStyle === 'split-contrast' || !titleStyle) && titleText) {
+    if (titleText.includes('\n')) {
+      const parts = titleText.split('\n').map(p => p.trim()).filter(p => p);
+      splitLine1 = parts[0] || '';
+      splitLine2 = parts.slice(1).join(' ') || null;
+    } else {
+      const words = titleText.trim().split(/\s+/).filter(w => w);
+      if (words.length <= 4) {
+        splitLine1 = words.join(' ');
+        splitLine2 = null;
+      } else {
+        const half = Math.ceil(words.length / 2);
+        splitLine1 = words.slice(0, half).join(' ');
+        splitLine2 = words.slice(half).join(' ');
+      }
+    }
+  }
+
+  const getSplitFontSize = (str: string) => {
+    if (str.length <= 16) return '54px';
+    if (str.length <= 25) return '46px';
+    if (str.length <= 36) return '40px';
+    if (str.length <= 48) return '35px';
+    return '30px';
+  };
 
   return (
     <div
@@ -327,56 +366,95 @@ const TitleOverlay: React.FC<{
         zIndex: 15,
         pointerEvents: 'none',
         direction: 'rtl',
-        gap: '10px',
+        gap: '0px',
         opacity,
         transform: `translateY(${translateY}px) scale(${scale})`,
       }}
     >
-      {/* Main Title Box */}
-      <div
-        style={{
-          background: titleBgColor,
-          color: titleColor,
-          fontFamily,
-          fontWeight: 900,
-          fontSize: titleStyle === 'centered-rect' ? '46px' : '42px',
-          padding: titleStyle === 'centered-rect' ? '12px 26px' : '14px 32px',
-          borderRadius: titleStyle === 'centered-rect' ? '8px' : '36px',
-          boxShadow: '0 10px 36px rgba(0,0,0,0.65)',
-          textAlign: 'center',
-          maxWidth: '90%',
-          lineHeight: 1.3,
-          letterSpacing: '-0.5px',
-          whiteSpace: 'pre-wrap',
-        }}
-      >
-        {titleText}
-      </div>
-
-      {/* Subtext / Episode Attribution (جزء من حلقة: ...) */}
-      {titleSubtext && titleSubtext.trim() && (
+      {titleStyle === 'split-contrast' || !titleStyle ? (
         <div
           style={{
-            background: 'rgba(0, 0, 0, 0.85)',
-            color: '#38bdf8',
-            fontFamily,
-            fontWeight: 700,
-            fontSize: '26px',
-            padding: '8px 24px',
-            borderRadius: '24px',
-            border: '1px solid rgba(56, 189, 248, 0.45)',
-            boxShadow: '0 6px 20px rgba(0,0,0,0.6)',
-            textAlign: 'center',
-            maxWidth: '88%',
-            lineHeight: 1.25,
-            whiteSpace: 'pre-wrap',
-            marginTop: '2px',
+            display: 'inline-flex',
+            flexDirection: 'column',
+            width: 'auto',
+            minWidth: '380px',
+            maxWidth: '92%',
+            margin: '0 auto',
+            boxShadow: '0 18px 50px rgba(0,0,0,0.85)',
+            borderRadius: '6px',
+            overflow: 'hidden',
+            alignItems: 'stretch',
+            justifyContent: 'center',
           }}
         >
-          {titleSubtext}
+          {/* Top Line: White BG, Black Text */}
+          <div
+            style={{
+              background: '#FFFFFF',
+              color: '#000000',
+              fontFamily,
+              fontWeight: 900,
+              fontSize: getSplitFontSize(splitLine1),
+              padding: '14px 28px',
+              textAlign: 'center',
+              lineHeight: 1.3,
+              width: '100%',
+              boxSizing: 'border-box',
+              wordBreak: 'break-word',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            {splitLine1}
+          </div>
+
+          {/* Bottom Line: Black BG, White Text (if 2nd line exists) */}
+          {splitLine2 && (
+            <div
+              style={{
+                background: '#000000',
+                color: '#FFFFFF',
+                fontFamily,
+                fontWeight: 900,
+                fontSize: getSplitFontSize(splitLine2),
+                padding: '14px 28px',
+                textAlign: 'center',
+                lineHeight: 1.3,
+                width: '100%',
+                boxSizing: 'border-box',
+                wordBreak: 'break-word',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {splitLine2}
+            </div>
+          )}
+        </div>
+      ) : (
+        /* Standard Title Box */
+        <div
+          style={{
+            background: titleBgColor,
+            color: titleColor,
+            fontFamily,
+            fontWeight: 900,
+            fontSize: titleStyle === 'centered-rect' ? '60px' : '55px',
+            padding: titleStyle === 'centered-rect' ? '12px 26px' : '16px 36px',
+            borderRadius: titleStyle === 'centered-rect' ? '0px' : '36px',
+            boxShadow: '0 10px 36px rgba(0,0,0,0.65)',
+            textAlign: 'center',
+            maxWidth: '88%',
+            lineHeight: 1.3,
+            letterSpacing: '-0.5px',
+            whiteSpace: 'pre-wrap',
+          }}
+        >
+          {titleText}
         </div>
       )}
-
     </div>
   );
 };
@@ -409,10 +487,9 @@ export const CaptionsVideo: React.FC<CaptionsData> = ({
   titleText = '',
   titleColor = '#FFFFFF',
   titleBgColor = '#000000',
-  titleDuration = 3.0,
-  titleTop = 12,
-  titleStyle = 'tiktok-pill',
-  titleSubtext = '',
+  titleDuration = 6.5,
+  titleTop = 14,
+  titleStyle = 'split-contrast',
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -516,7 +593,7 @@ export const CaptionsVideo: React.FC<CaptionsData> = ({
       `}</style>
       {/* Background Video (if provided) */}
       {videoPath ? (
-        <Video
+        <OffthreadVideo
           src={staticFile(videoPath)}
           volume={0}
           style={{
@@ -561,12 +638,11 @@ export const CaptionsVideo: React.FC<CaptionsData> = ({
       {showTitle && titleText && (
         <TitleOverlay
           titleText={titleText}
-          titleSubtext={titleSubtext}
           titleColor={titleColor}
           titleBgColor={titleBgColor}
           titleDuration={titleDuration}
           titleTop={titleTop}
-          titleStyle={titleStyle}
+          titleStyle={titleStyle || 'split-contrast'}
           frame={frame}
           fps={fps}
           fontFamily={activeFontFamily}
@@ -618,21 +694,21 @@ export const CaptionsVideo: React.FC<CaptionsData> = ({
       {audioPath && <Audio src={staticFile(audioPath)} />}
 
       {/* Centered captions container with RTL flow */}
-      {animationType !== 'none' && activeSegment && (
-        <div
-          style={{
-            position: 'absolute',
-            top: `${captionTop}%`,
-            left: 0,
-            right: 0,
-            textAlign: 'center',
-            direction: 'rtl',
-            zIndex: 10,
-            display: 'flex',
-            justifyContent: 'center',
-            transform: 'translateY(-50%)',
-          }}
-        >
+      <div
+        style={{
+          position: 'absolute',
+          top: `${captionTop}%`,
+          left: 0,
+          right: 0,
+          textAlign: 'center',
+          direction: 'rtl',
+          zIndex: 10,
+          display: 'flex',
+          justifyContent: 'center',
+          transform: 'translateY(-50%)',
+        }}
+      >
+        {activeSegment && (
           <div 
             key={activeSegmentIndex}
             style={bgBoxStyle}
@@ -678,8 +754,8 @@ export const CaptionsVideo: React.FC<CaptionsData> = ({
               />
             )}
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

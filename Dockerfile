@@ -62,6 +62,9 @@ RUN npx remotion browser ensure
 # Copy all project files
 COPY . .
 
+# Pre-bundle Remotion composition so it is compiled once during build time, eliminating runtime Webpack build delays
+RUN npx remotion bundle src/index.ts build
+
 # Create public folder if not exists
 RUN mkdir -p public
 

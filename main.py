@@ -57,6 +57,31 @@ def init_cookies():
 
 init_cookies()
 
+@app.on_event("startup")
+async def ensure_remotion_prebundle():
+    """Ensure Remotion bundle exists so runtime renders never pay Webpack compile penalty."""
+    build_dir = os.path.join(_base_dir, "build")
+    if not os.path.exists(build_dir):
+        print("⚡ [Remotion] 'build/' directory not found. Starting background pre-bundle...", flush=True)
+        async def _do_bundle():
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "npx", "remotion", "bundle", "src/index.ts", "build",
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    cwd=_base_dir
+                )
+                stdout, stderr = await proc.communicate()
+                if proc.returncode == 0:
+                    print("✅ [Remotion] Pre-bundle created successfully at ./build!", flush=True)
+                else:
+                    print(f"⚠️ [Remotion] Pre-bundle notice: {stderr.decode()[:200]}", flush=True)
+            except Exception as e:
+                print(f"⚠️ [Remotion] Pre-bundle background task error: {e}", flush=True)
+        asyncio.create_task(_do_bundle())
+    else:
+        print("⚡ [Remotion] Pre-bundled 'build/' directory detected and ready for ultra-fast rendering!", flush=True)
+
 # Global model variable for lazy loading
 whisper_model = None
 
@@ -359,8 +384,8 @@ class RenderRequest(BaseModel):
     titleColor: str | None = "#FFFFFF"
     titleBgColor: str | None = "#000000"
     titleDuration: float = 3.0
-    titleTop: float = 12.0
-    titleStyle: str = "tiktok-pill"
+    titleTop: float = 14.0
+    titleStyle: str = "split-contrast"
 
 def download_audio_via_rapidapi(youtube_url: str, output_path: str) -> str:
     import re
@@ -2180,16 +2205,24 @@ async def run_render_task(task_id: str, request_data: RenderRequest):
     try:
         props_path = os.path.join(task_dir, "captions.json")
         import json
+        dump_data = request_data.model_dump()
+        dump_data["titleSubtext"] = ""
+        if not dump_data.get("titleStyle") or dump_data.get("titleStyle") == "tiktok-pill":
+            dump_data["titleStyle"] = "split-contrast"
         with open(props_path, "w", encoding="utf-8") as f:
-            json.dump(request_data.model_dump(), f, ensure_ascii=False, indent=2)
+            json.dump(dump_data, f, ensure_ascii=False, indent=2)
             
         output_video_path = os.path.join(task_dir, "output.mp4")
-        concurrency_val = "4"
-        print(f"[{task_id}] Rendering video with user edits (concurrency={concurrency_val}, CRF=22, max speed)...")
+        concurrency_val = str(min(os.cpu_count() or 4, 8))
+        
+        # Use pre-bundled directory if available to skip Webpack build overhead
+        bundle_dir = os.path.join(_base_dir, "build")
+        render_entry = bundle_dir if (os.path.exists(bundle_dir) and os.path.isdir(bundle_dir)) else "src/index.ts"
+        print(f"[{task_id}] Rendering video with user edits (entry={render_entry}, concurrency={concurrency_val}, CRF=22, max speed)...")
         
         render_cmd = [
             "npx", "remotion", "render",
-            "src/index.ts",
+            render_entry,
             "CaptionsVideo",
             output_video_path,
             "--props", props_path,
@@ -2200,7 +2233,7 @@ async def run_render_task(task_id: str, request_data: RenderRequest):
             "--offthreadvideo-cache-size-in-bytes=268435456",
             "--jpeg-quality=80",
             "--log=error",
-            "--browser-args=--no-sandbox --disable-dev-shm-usage --disable-gpu --no-zygote --disable-extensions --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-setuid-sandbox --js-flags=--max-old-space-size=4096"
+            "--browser-args=--no-sandbox --disable-dev-shm-usage --disable-gpu --disable-extensions --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-setuid-sandbox --js-flags=--max-old-space-size=4096"
         ]
         
         render_env = {**os.environ, "REMOTION_DISABLE_TELEMETRY": "1", "NODE_OPTIONS": "--max-old-space-size=4096"}
@@ -2299,8 +2332,8 @@ async def generate_video(
     titleColor: str = Form("#FFFFFF"),
     titleBgColor: str = Form("#000000"),
     titleDuration: float = Form(3.0),
-    titleTop: float = Form(12.0),
-    titleStyle: str = Form("tiktok-pill")
+    titleTop: float = Form(14.0),
+    titleStyle: str = Form("split-contrast")
 ):
     # 1. Create a unique task ID and workspace
     task_id = str(uuid.uuid4())
@@ -2489,12 +2522,12 @@ async def generate_video(
             "showBg": True,
             "showTitle": showTitle,
             "titleText": titleText,
-            "titleSubtext": titleSubtext,
+            "titleSubtext": "",
             "titleColor": titleColor,
             "titleBgColor": titleBgColor,
             "titleDuration": titleDuration,
-            "titleTop": titleTop,
-            "titleStyle": titleStyle
+            "titleTop": titleTop if titleTop else 14.0,
+            "titleStyle": "split-contrast" if (not titleStyle or titleStyle == "tiktok-pill") else titleStyle
         }
         
         props_path = os.path.join(task_dir, "captions.json")
@@ -2503,21 +2536,26 @@ async def generate_video(
             
         # 4. Render Video using Remotion CLI
         output_video_path = os.path.join(task_dir, "output.mp4")
-        concurrency_val = "4"
-        print(f"[{task_id}] Rendering video (concurrency={concurrency_val}, CRF=22)...")
+        concurrency_val = str(min(os.cpu_count() or 4, 8))
+        
+        bundle_dir = os.path.join(_base_dir, "build")
+        render_entry = bundle_dir if (os.path.exists(bundle_dir) and os.path.isdir(bundle_dir)) else "src/index.ts"
+        print(f"[{task_id}] Rendering video (entry={render_entry}, concurrency={concurrency_val}, CRF=22)...")
         
         # Build rendering command
         render_cmd = [
             "npx", "remotion", "render",
-            "src/index.ts",
+            render_entry,
             "CaptionsVideo",
             output_video_path,
             "--props", props_path,
             f"--concurrency={concurrency_val}",
             "--crf=22",
             "--pixel-format=yuv420p",
+            "--gl=swangle",
+            "--offthreadvideo-cache-size-in-bytes=268435456",
             "--jpeg-quality=80",
-            "--browser-args=--no-sandbox --disable-dev-shm-usage --disable-gpu --no-zygote --disable-extensions"
+            "--browser-args=--no-sandbox --disable-dev-shm-usage --disable-gpu --disable-extensions --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-setuid-sandbox --js-flags=--max-old-space-size=4096"
         ]
         
         # Run the subprocess asynchronously

@@ -44,5 +44,4 @@ export interface CaptionsData {
   titleDuration?: number;
   titleTop?: number;
   titleStyle?: string;
-  titleSubtext?: string;
 }
