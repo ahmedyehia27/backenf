@@ -28,18 +28,29 @@ app.add_middleware(
 
 # Copy Thmanyah fonts to public/fonts so Remotion staticFile() can find them
 _base_dir = os.path.dirname(os.path.abspath(__file__))
-_fonts_src = os.path.join(_base_dir, "netlify-deploy", "fonts")
 _fonts_dst = os.path.join(_base_dir, "public", "fonts")
 os.makedirs(_fonts_dst, exist_ok=True)
-if os.path.exists(_fonts_src):
-    for _fname in os.listdir(_fonts_src):
-        _src_f = os.path.join(_fonts_src, _fname)
-        _dst_f = os.path.join(_fonts_dst, _fname)
-        if os.path.isfile(_src_f) and not os.path.exists(_dst_f):
-            shutil.copy2(_src_f, _dst_f)
-    print(f"✅ Thmanyah fonts copied to {_fonts_dst}")
-else:
-    print(f"⚠️ fonts source not found: {_fonts_src}")
+_font_candidates = [
+    os.path.join(_base_dir, "netlify-deploy", "fonts"),
+    os.path.join(_base_dir, "Thmanyah-Font-Family"),
+    os.path.join(_base_dir, "..", "netlify-deploy", "fonts"),
+    os.path.join(_base_dir, "fonts"),
+]
+_copied_fonts = 0
+for _c in _font_candidates:
+    if os.path.exists(_c):
+        for _root, _dirs, _files in os.walk(_c):
+            for _fname in _files:
+                if _fname.endswith((".woff2", ".ttf", ".otf")):
+                    _src_f = os.path.join(_root, _fname)
+                    _dst_f = os.path.join(_fonts_dst, _fname)
+                    if not os.path.exists(_dst_f):
+                        try:
+                            shutil.copy2(_src_f, _dst_f)
+                            _copied_fonts += 1
+                        except Exception:
+                            pass
+print(f"✅ Fonts verified in {_fonts_dst} (synced {_copied_fonts} files).", flush=True)
 
 COOKIE_FILE_PATH = "/tmp/cookies.txt"
 
@@ -58,29 +69,15 @@ def init_cookies():
 init_cookies()
 
 @app.on_event("startup")
-async def ensure_remotion_prebundle():
-    """Ensure Remotion bundle exists so runtime renders never pay Webpack compile penalty."""
+async def cleanup_stale_build():
+    """Clean up any stale build/ folder to guarantee rendering is always from fresh source and public files resolve properly."""
     build_dir = os.path.join(_base_dir, "build")
-    if not os.path.exists(build_dir):
-        print("⚡ [Remotion] 'build/' directory not found. Starting background pre-bundle...", flush=True)
-        async def _do_bundle():
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    "npx", "remotion", "bundle", "src/index.ts", "build",
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    cwd=_base_dir
-                )
-                stdout, stderr = await proc.communicate()
-                if proc.returncode == 0:
-                    print("✅ [Remotion] Pre-bundle created successfully at ./build!", flush=True)
-                else:
-                    print(f"⚠️ [Remotion] Pre-bundle notice: {stderr.decode()[:200]}", flush=True)
-            except Exception as e:
-                print(f"⚠️ [Remotion] Pre-bundle background task error: {e}", flush=True)
-        asyncio.create_task(_do_bundle())
-    else:
-        print("⚡ [Remotion] Pre-bundled 'build/' directory detected and ready for ultra-fast rendering!", flush=True)
+    if os.path.exists(build_dir):
+        try:
+            shutil.rmtree(build_dir, ignore_errors=True)
+            print("🧹 Removed stale build/ directory to ensure fresh source rendering and prevent 404s.", flush=True)
+        except Exception:
+            pass
 
 # Global model variable for lazy loading
 whisper_model = None
@@ -2215,9 +2212,8 @@ async def run_render_task(task_id: str, request_data: RenderRequest):
         output_video_path = os.path.join(task_dir, "output.mp4")
         concurrency_val = str(min(os.cpu_count() or 4, 8))
         
-        # Use pre-bundled directory if available to skip Webpack build overhead
-        bundle_dir = os.path.join(_base_dir, "build")
-        render_entry = bundle_dir if (os.path.exists(bundle_dir) and os.path.isdir(bundle_dir)) else "src/index.ts"
+        # Always render directly from src/index.ts to avoid Remotion bundle public folder isolation
+        render_entry = "src/index.ts"
         print(f"[{task_id}] Rendering video with user edits (entry={render_entry}, concurrency={concurrency_val}, CRF=22, max speed)...")
         
         render_cmd = [
@@ -2226,6 +2222,7 @@ async def run_render_task(task_id: str, request_data: RenderRequest):
             "CaptionsVideo",
             output_video_path,
             "--props", props_path,
+            "--public-dir=public",
             f"--concurrency={concurrency_val}",
             "--crf=22",
             "--pixel-format=yuv420p",
@@ -2538,9 +2535,9 @@ async def generate_video(
         output_video_path = os.path.join(task_dir, "output.mp4")
         concurrency_val = str(min(os.cpu_count() or 4, 8))
         
-        bundle_dir = os.path.join(_base_dir, "build")
-        render_entry = bundle_dir if (os.path.exists(bundle_dir) and os.path.isdir(bundle_dir)) else "src/index.ts"
-        print(f"[{task_id}] Rendering video (entry={render_entry}, concurrency={concurrency_val}, CRF=22)...")
+        # Always render directly from src/index.ts to avoid Remotion bundle public folder isolation
+        render_entry = "src/index.ts"
+        print(f"[{task_id}] Rendering video (entry={render_entry}, concurrency={concurrency_val}, CRF=22, max speed)...")
         
         # Build rendering command
         render_cmd = [
@@ -2549,20 +2546,24 @@ async def generate_video(
             "CaptionsVideo",
             output_video_path,
             "--props", props_path,
+            "--public-dir=public",
             f"--concurrency={concurrency_val}",
             "--crf=22",
             "--pixel-format=yuv420p",
             "--gl=swangle",
             "--offthreadvideo-cache-size-in-bytes=268435456",
             "--jpeg-quality=80",
+            "--log=error",
             "--browser-args=--no-sandbox --disable-dev-shm-usage --disable-gpu --disable-extensions --disable-background-timer-throttling --disable-backgrounding-occluded-windows --disable-setuid-sandbox --js-flags=--max-old-space-size=4096"
         ]
         
+        render_env = {**os.environ, "REMOTION_DISABLE_TELEMETRY": "1", "NODE_OPTIONS": "--max-old-space-size=4096"}
         # Run the subprocess asynchronously
         process = await asyncio.create_subprocess_exec(
             *render_cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stderr=subprocess.PIPE,
+            env=render_env
         )
         
         stdout, stderr = await process.communicate()
