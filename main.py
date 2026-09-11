@@ -2298,13 +2298,13 @@ async def download_rendered_video(task_id: str, background_tasks: BackgroundTask
     if not os.path.exists(output_video_path):
         raise HTTPException(status_code=404, detail="Video not found")
         
-    background_tasks.add_task(clean_temp_dir, task_dir)
-    # Also clean up the task state after a delay to avoid memory leak
-    async def remove_task_state():
-        await asyncio.sleep(60)
+    # Keep the rendered video safe on disk for 5 minutes so client downloads and retries never fail
+    async def delayed_cleanup():
+        await asyncio.sleep(300)
+        clean_temp_dir(task_dir)
         if task_id in RENDER_TASKS:
             del RENDER_TASKS[task_id]
-    background_tasks.add_task(remove_task_state)
+    background_tasks.add_task(delayed_cleanup)
     
     return FileResponse(
         output_video_path,
@@ -2575,8 +2575,11 @@ async def generate_video(
             
         print(f"[{task_id}] Render completed successfully!")
         
-        # Add background task to clean up the temporary directory after the response is sent
-        background_tasks.add_task(clean_temp_dir, task_dir)
+        # Keep video safe on disk for 5 minutes so client downloads never get cut off
+        async def delayed_cleanup_gen():
+            await asyncio.sleep(300)
+            clean_temp_dir(task_dir)
+        background_tasks.add_task(delayed_cleanup_gen)
         
         # 5. Return the generated video file
         return FileResponse(
