@@ -1,0 +1,6895 @@
+// ==================== Safe DOM Ready Helper ====================
+function onDOMReady(fn) {
+  if (document.readyState === 'interactive' || document.readyState === 'complete') {
+    setTimeout(fn, 0);
+  } else {
+    document.addEventListener('DOMContentLoaded', fn);
+  }
+}
+
+// ==================== Audio Chime Synthesis ====================
+function playSuccessSound() {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const now = audioCtx.currentTime;
+    
+    const osc1 = audioCtx.createOscillator();
+    const gain1 = audioCtx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(523.25, now); // C5
+    gain1.gain.setValueAtTime(0.15, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
+    osc1.connect(gain1);
+    gain1.connect(audioCtx.destination);
+    osc1.start(now);
+    osc1.stop(now + 0.5);
+    
+    const osc2 = audioCtx.createOscillator();
+    const gain2 = audioCtx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(659.25, now + 0.12); // E5
+    gain2.gain.setValueAtTime(0.15, now + 0.12);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+    osc2.connect(gain2);
+    gain2.connect(audioCtx.destination);
+    osc2.start(now + 0.12);
+    osc2.stop(now + 0.6);
+  } catch (e) {
+    console.error('Failed to play success sound:', e);
+  }
+}
+
+// ==================== State ====================
+let audioFile = null;
+let leftLogoFile = null;
+let rightLogoFile = null;
+let selectedAnimation = 'classic';
+let captionTop = 68;
+let customFontDataUrl = null;
+let customFontName = null;
+
+function loadGoogleFontCSS(fontName) {
+  const id = `gfont-${fontName.replace(/\+/g, '-')}`;
+  if (!document.getElementById(id)) {
+    const link = document.createElement('link');
+    link.id = id;
+    link.rel = 'stylesheet';
+    link.href = `https://fonts.googleapis.com/css2?family=${fontName}:wght@400;600;700;900&display=swap`;
+    document.head.appendChild(link);
+  }
+}
+
+window.applyLiveFontPreview = function(fontKey) {
+  let fontCSSName = "'Thmanyah', 'Cairo', sans-serif";
+  let fontWeightOverride = '400';
+  
+  if (fontKey === 'thmanyah-regular') {
+    fontCSSName = "'Thmanyah', 'Cairo', sans-serif";
+    fontWeightOverride = '400';
+  } else if (fontKey === 'thmanyah') {
+    fontCSSName = "'Thmanyah', 'Cairo', sans-serif";
+    fontWeightOverride = '400';
+  } else if (fontKey === 'tajawal') {
+    loadGoogleFontCSS('Tajawal');
+    fontCSSName = "'Tajawal', 'Cairo', sans-serif";
+  } else if (fontKey === 'almarai') {
+    loadGoogleFontCSS('Almarai');
+    fontCSSName = "'Almarai', 'Cairo', sans-serif";
+  } else if (fontKey === 'noto-kufi') {
+    loadGoogleFontCSS('Noto+Kufi+Arabic');
+    fontCSSName = "'Noto Kufi Arabic', 'Cairo', sans-serif";
+  } else if (fontKey === 'alexandria') {
+    loadGoogleFontCSS('Alexandria');
+    fontCSSName = "'Alexandria', 'Cairo', sans-serif";
+  } else if (fontKey === 'changa') {
+    loadGoogleFontCSS('Changa');
+    fontCSSName = "'Changa', 'Cairo', sans-serif";
+  } else if (fontKey === 'amiri') {
+    loadGoogleFontCSS('Amiri');
+    fontCSSName = "'Amiri', 'Cairo', sans-serif";
+  } else if (fontKey === 'custom' && customFontName) {
+    fontCSSName = `'${customFontName}', 'Cairo', sans-serif`;
+  }
+
+  let styleTag = document.getElementById('live-font-preview-style');
+  if (!styleTag) {
+    styleTag = document.createElement('style');
+    styleTag.id = 'live-font-preview-style';
+    document.head.appendChild(styleTag);
+  }
+  styleTag.innerHTML = `
+    .segment-card, .segment-text, .word-chip, .word-input, #editor-segments, #transcription-text, .editable-word-btn,
+    #caption-overlay, #caption-overlay *, .caption-word, .slide-wrapper, .preview-media-wrapper, .preview-media-wrapper * {
+      font-family: ${fontCSSName} !important;
+    }
+  `;
+};
+
+window.handleFontFamilyChange = function(val) {
+  const uploadSelect = document.getElementById('upload-font-family-select');
+  const editorSelect = document.getElementById('font-family-select');
+  if (uploadSelect && uploadSelect.value !== val) uploadSelect.value = val;
+  if (editorSelect && editorSelect.value !== val) editorSelect.value = val;
+
+  const customContainer = document.getElementById('custom-font-upload-container');
+  const uploadCustomContainer = document.getElementById('upload-custom-font-upload-container');
+  if (val === 'custom') {
+    if (customContainer) customContainer.style.display = 'block';
+    if (uploadCustomContainer) uploadCustomContainer.style.display = 'block';
+    if (!customFontDataUrl) {
+      const fileInput = document.getElementById('custom-font-file-input') || document.getElementById('upload-custom-font-file-input');
+      if (fileInput) fileInput.click();
+    }
+  } else {
+    if (customContainer) customContainer.style.display = 'none';
+    if (uploadCustomContainer) uploadCustomContainer.style.display = 'none';
+  }
+
+  window.applyLiveFontPreview(val);
+  if (typeof updateLiveCaptionOverlay === 'function' && typeof currentTime !== 'undefined') {
+    updateLiveCaptionOverlay(currentTime);
+  }
+};
+
+window.handleCustomFontUpload = function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const validExts = ['.ttf', '.otf', '.woff', '.woff2'];
+  const fileName = file.name;
+  const ext = fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+
+  if (!validExts.includes(ext)) {
+    alert('الرجاء اختيار ملف خط بصيغة مدعومة (.ttf, .otf, .woff, .woff2)!');
+    return;
+  }
+
+  const statusEl = document.getElementById('custom-font-status');
+  const uploadStatusEl = document.getElementById('upload-custom-font-status');
+  const msgText = `جارٍ تحميل الخط: ${fileName}...`;
+  if (statusEl) statusEl.textContent = msgText;
+  if (uploadStatusEl) uploadStatusEl.textContent = msgText;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    customFontDataUrl = e.target.result;
+    const cleanFontName = 'Custom_' + fileName.replace(/[^a-zA-Z0-9]/g, '_');
+    customFontName = cleanFontName;
+
+    try {
+      const fontFace = new FontFace(cleanFontName, `url(${customFontDataUrl})`);
+      fontFace.load().then(function(loadedFace) {
+        document.fonts.add(loadedFace);
+        const successMsg = `✅ تم رفع الخط وتفعيله بنجاح: <strong>${fileName}</strong>`;
+        if (statusEl) statusEl.innerHTML = successMsg;
+        if (uploadStatusEl) uploadStatusEl.innerHTML = successMsg;
+        window.applyLiveFontPreview('custom');
+      }).catch(function(err) {
+        console.warn('FontFace API load warning:', err);
+        const successMsg = `✅ تم رفع الخط بنجاح: <strong>${fileName}</strong>`;
+        if (statusEl) statusEl.innerHTML = successMsg;
+        if (uploadStatusEl) uploadStatusEl.innerHTML = successMsg;
+        window.applyLiveFontPreview('custom');
+      });
+    } catch (err) {
+      const successMsg = `✅ تم رفع الخط بنجاح: <strong>${fileName}</strong>`;
+      if (statusEl) statusEl.innerHTML = successMsg;
+      if (uploadStatusEl) uploadStatusEl.innerHTML = successMsg;
+      window.applyLiveFontPreview('custom');
+    }
+  };
+  reader.readAsDataURL(file);
+};
+
+let transcribeData = null; // Holds the JSON returned from /api/transcribe
+let activeSegmentIndex = -1;
+let currentTime = 0;
+
+// ==================== UI View Elements ====================
+const uploadState = document.getElementById('upload-state');
+const loadingState = document.getElementById('loading-state');
+const successState = document.getElementById('success-state');
+const errorState = document.getElementById('error-state');
+
+// ==================== Form Elements ====================
+const formControls = document.getElementById('form-controls');
+const submitBtn = document.getElementById('submit-btn');
+const progressMsg = document.getElementById('progress-msg');
+const errorMsg = document.getElementById('error-msg');
+const outputVideo = document.getElementById('output-video');
+const downloadLink = document.getElementById('download-link');
+let apiUrl = window.location.origin.includes('hf.space')
+  ? window.location.origin
+  : 'https://backenf-production-7d8b.up.railway.app';
+let audioApiUrl = 'https://youtube-audio-backend-production-8c19.up.railway.app';
+const apiUrlInput = document.getElementById('api-url');
+if (apiUrlInput) {
+  apiUrlInput.value = apiUrl;
+  apiUrlInput.addEventListener('input', function() {
+    apiUrl = this.value.trim().replace(/\/$/, '');
+  });
+}
+
+// ==================== Visitor Analytics & Tracking ====================
+let visitorId = localStorage.getItem('visitor_id');
+let isNewVisitor = false;
+if (!visitorId) {
+  visitorId = 'visitor_' + Math.random().toString(36).substring(2, 9) + Date.now().toString(36);
+  localStorage.setItem('visitor_id', visitorId);
+  isNewVisitor = true;
+}
+
+// ==================== Firebase Firestore Persistent System ====================
+let isSuspended = false;
+
+window.ensureUserAuthenticated = function() {
+  if (isSuspended) {
+    const suspModal = document.getElementById('suspended-modal');
+    if (suspModal) suspModal.style.display = 'flex';
+    return false;
+  }
+  if (!currentUser) {
+    const loginModal = document.getElementById('login-prompt-modal');
+    if (loginModal) loginModal.style.display = 'flex';
+    return false;
+  }
+  return true;
+};
+
+async function syncUserWithFirestore(user) {
+  if (!window.firebaseDb) {
+    console.warn("Firestore is not initialized yet.");
+    return null;
+  }
+  try {
+    const userRef = window.firebaseDb.collection('users').doc(user.uid);
+    const doc = await userRef.get();
+    if (doc.exists) {
+      return doc.data();
+    } else {
+      const newUserData = {
+        uid: user.uid,
+        email: user.email,
+        name: user.displayName || user.email,
+        whatsapp: null,
+        is_active: true,
+        renders_count: 0,
+        created_at: new Date().toISOString()
+      };
+      await userRef.set(newUserData);
+      return newUserData;
+    }
+  } catch (err) {
+    console.error("Error syncing user with Firestore:", err);
+    return null;
+  }
+}
+
+async function trackEventFirestore(eventType, isNew = false) {
+  if (!window.firebaseDb) {
+    // Retry once when Firebase finishes initializing
+    setTimeout(() => {
+      if (window.firebaseDb) {
+        window.firebaseDb.collection('analytics').add({
+          visitor_id: visitorId,
+          event_type: eventType,
+          is_new: isNew,
+          timestamp: new Date().toISOString()
+        }).catch(e => console.warn(e));
+      }
+    }, 2000);
+    return;
+  }
+  try {
+    await window.firebaseDb.collection('analytics').add({
+      visitor_id: visitorId,
+      event_type: eventType,
+      is_new: isNew,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.warn("Failed to track event in Firestore:", err);
+  }
+}
+
+// Track Visit Event on load
+trackEventFirestore('visit', isNewVisitor);
+fetch(`${apiUrl.replace(/\/$/, '')}/api/track`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    visitor_id: visitorId,
+    event_type: 'visit',
+    is_new: isNewVisitor
+  })
+}).catch(err => console.warn('Tracking visit failed:', err));
+
+// Log Firebase Analytics Event
+try {
+  window.logFirebaseEvent?.('visit', { is_new: isNewVisitor, visitor_id: visitorId });
+} catch (_) {}
+
+function trackAction(eventType) {
+  trackEventFirestore(eventType, false);
+  fetch(`${apiUrl.replace(/\/$/, '')}/api/track`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      visitor_id: visitorId,
+      event_type: eventType,
+      is_new: false
+    })
+  }).catch(err => console.warn(`Tracking event ${eventType} failed:`, err));
+
+  try {
+    window.logFirebaseEvent?.(eventType === 'upload' ? 'upload_media' : 'render_video', { visitor_id: visitorId });
+  } catch (_) {}
+}
+
+// ==================== Admin Dashboard UI Functions ====================
+let adminToken = '';
+
+function openAdminModal() {
+  const modal = document.getElementById('admin-modal');
+  if (modal) modal.style.display = 'flex';
+  const loginScreen = document.getElementById('admin-login-screen');
+  if (loginScreen) loginScreen.style.display = 'block';
+  const dashScreen = document.getElementById('admin-dashboard-screen');
+  if (dashScreen) dashScreen.style.display = 'none';
+  const errDiv = document.getElementById('admin-login-error');
+  if (errDiv) errDiv.style.display = 'none';
+}
+
+function closeAdminModal() {
+  const modal = document.getElementById('admin-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+window.openAdminModal = openAdminModal;
+window.closeAdminModal = closeAdminModal;
+
+window.addEventListener('hashchange', () => {
+  if (window.location.hash === '#admin') {
+    openAdminModal();
+  }
+});
+
+async function handleAdminLogin(event) {
+  event.preventDefault();
+  const email = document.getElementById('admin-email').value;
+  const password = document.getElementById('admin-password').value;
+  const errorDiv = document.getElementById('admin-login-error');
+  
+  errorDiv.style.display = 'none';
+  
+  try {
+    const response = await fetch(`${apiUrl.replace(/\/$/, '')}/api/admin/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+    
+    if (!response.ok) {
+      throw new Error('بيانات الدخول غير صحيحة');
+    }
+    
+    const data = await response.json();
+    adminToken = data.token;
+    
+    document.getElementById('admin-login-screen').style.display = 'none';
+    document.getElementById('admin-dashboard-screen').style.display = 'block';
+    
+    refreshAdminStats();
+  } catch (err) {
+    errorDiv.textContent = err.message || 'بيانات الدخول غير صحيحة';
+    errorDiv.style.display = 'block';
+  }
+}
+
+async function refreshAdminStats() {
+  if (!adminToken) return;
+  fetchSystemKeysBackend();
+  if (!window.firebaseDb) {
+    alert("برجاء الانتظار، جاري تهيئة قاعدة بيانات فايربيز...");
+    return;
+  }
+  
+  try {
+    // 1. Fetch all users from Firestore
+    const usersSnapshot = await window.firebaseDb.collection('users').orderBy('created_at', 'desc').get();
+    const usersList = [];
+    usersSnapshot.forEach(doc => {
+      usersList.push(doc.data());
+    });
+    
+    // 2. Fetch all analytics events from Firestore
+    const analyticsSnapshot = await window.firebaseDb.collection('analytics').orderBy('timestamp', 'desc').get();
+    const eventsList = [];
+    analyticsSnapshot.forEach(doc => {
+      eventsList.push(doc.data());
+    });
+    
+    // Calculate Stats
+    const totalVisits = eventsList.filter(e => e.event_type === 'visit').length;
+    const newVisits = eventsList.filter(e => e.event_type === 'visit' && e.is_new === true).length;
+    const returningVisits = eventsList.filter(e => e.event_type === 'visit' && e.is_new !== true).length;
+    const totalUploads = eventsList.filter(e => e.event_type === 'upload').length;
+    const totalRenders = eventsList.filter(e => e.event_type === 'render').length;
+    const totalUsers = usersList.length;
+    
+    // Update Badge UI
+    document.getElementById('stat-total-visits').textContent = totalVisits;
+    document.getElementById('stat-new-visits').textContent = newVisits;
+    document.getElementById('stat-returning-visits').textContent = returningVisits;
+    document.getElementById('stat-total-uploads').textContent = totalUploads;
+    document.getElementById('stat-total-renders').textContent = totalRenders;
+    
+    const statTotalUsers = document.getElementById('stat-total-users');
+    if (statTotalUsers) {
+      statTotalUsers.textContent = totalUsers;
+    }
+    
+    // 3. Update Events Log Table (Recent 50)
+    const tbody = document.getElementById('admin-events-log-body');
+    tbody.innerHTML = '';
+    
+    const recentEvents = eventsList.slice(0, 50);
+    if (recentEvents.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="4" style="padding: 30px; text-align: center; color: rgba(255,255,255,0.4);">لا توجد أحداث مسجلة بعد</td></tr>`;
+    } else {
+      recentEvents.forEach(e => {
+        const timeStr = e.timestamp ? new Date(e.timestamp).toLocaleString('ar-EG') : '';
+        const tr = document.createElement('tr');
+        tr.style.borderBottom = '1px solid rgba(255,255,255,0.03)';
+        
+        let typeBadge = '';
+        if (e.event_type === 'visit') {
+          typeBadge = '<span style="color: #a78bfa;">👁️ زيارة للموقع</span>';
+        } else if (e.event_type === 'upload') {
+          typeBadge = '<span style="color: #fbbf24;">📤 تفريغ صوتي (رفع)</span>';
+        } else if (e.event_type === 'render') {
+          typeBadge = '<span style="color: #f472b6;">🎬 رندرة فيديو</span>';
+        }
+        
+        const userBadge = e.is_new 
+          ? '<span style="background: rgba(16, 185, 129, 0.1); color: #34d399; padding: 3px 8px; border-radius: 8px; font-size: 11px; font-weight: 600;">زائر جديد</span>'
+          : '<span style="background: rgba(59, 130, 246, 0.1); color: #60a5fa; padding: 3px 8px; border-radius: 8px; font-size: 11px; font-weight: 600;">زائر متكرر</span>';
+        
+        tr.innerHTML = `
+          <td style="padding: 12px 15px; font-family: monospace; color: rgba(255,255,255,0.4); font-size: 11px;">${e.visitor_id ? e.visitor_id.substring(0, 8) : ''}</td>
+          <td style="padding: 12px 15px; font-weight: 600;">${typeBadge}</td>
+          <td style="padding: 12px 15px;">${userBadge}</td>
+          <td style="padding: 12px 15px; color: rgba(255,255,255,0.5); font-size: 11px;">${timeStr}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+    }
+    
+    // 4. Update Users Log Table (Recent 50)
+    const usersTbody = document.getElementById('admin-users-log-body');
+    if (usersTbody) {
+      usersTbody.innerHTML = '';
+      if (usersList.length === 0) {
+        usersTbody.innerHTML = `<tr><td colspan="7" style="padding: 30px; text-align: center; color: rgba(255,255,255,0.4);">لا يوجد أعضاء مسجلين بعد</td></tr>`;
+      } else {
+        const recentUsers = usersList.slice(0, 50);
+        recentUsers.forEach(u => {
+          const timeStr = u.created_at ? new Date(u.created_at).toLocaleString('ar-EG') : '';
+          const is_active = u.is_active !== false;
+          const statusText = is_active ? '<span style="color:#10b981; font-weight:bold;">نشط</span>' : '<span style="color:#ef4444; font-weight:bold;">موقوف</span>';
+          const btnText = is_active ? 'إيقاف 🚫' : 'تفعيل ✅';
+          const btnColor = is_active ? '#ef4444' : '#10b981';
+          const btnBg = is_active ? 'rgba(239, 68, 68, 0.1)' : 'rgba(16, 185, 129, 0.1)';
+          const btnBorder = is_active ? 'rgba(239, 68, 68, 0.2)' : 'rgba(16, 185, 129, 0.2)';
+          
+          const rendersCount = u.renders_count !== undefined ? u.renders_count : 0;
+          
+          const tr = document.createElement('tr');
+          tr.style.borderBottom = '1px solid rgba(255,255,255,0.03)';
+          tr.innerHTML = `
+            <td style="padding: 12px 15px; font-weight: 600;">${u.name || ''}</td>
+            <td style="padding: 12px 15px; color: rgba(255,255,255,0.6);">${u.email || ''}</td>
+            <td style="padding: 12px 15px; color: var(--purple-accent); font-weight: 600; text-align: center;">${u.whatsapp || 'غير مسجل'}</td>
+            <td style="padding: 12px 15px; color: rgba(255,255,255,0.5); font-size: 11px;">${timeStr}</td>
+            <td style="padding: 12px 15px; text-align: center; color: #fbbf24; font-weight: bold;">${rendersCount}</td>
+            <td style="padding: 12px 15px; text-align: center;">${statusText}</td>
+            <td style="padding: 12px 15px; text-align: center;">
+              <button onclick="toggleUserStatus('${u.uid}', ${is_active})" style="padding: 6px 12px; border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer; color: ${btnColor}; background: ${btnBg}; border: 1px solid ${btnBorder};">
+                ${btnText}
+              </button>
+            </td>
+          `;
+          usersTbody.appendChild(tr);
+        });
+      }
+    }
+  } catch (err) {
+    console.error("Error refreshing stats from Firestore:", err);
+    alert('حدث خطأ أثناء جلب البيانات من فايربيز: ' + err.message);
+  }
+}
+
+window.toggleUserStatus = async function(uid, is_active) {
+  if (!confirm(`هل أنت متأكد من تغيير حالة هذا الحساب؟`)) return;
+  try {
+    if (!window.firebaseDb) {
+      alert("قاعدة بيانات فايربيز غير جاهزة بعد");
+      return;
+    }
+    await window.firebaseDb.collection('users').doc(uid).update({
+      is_active: !is_active
+    });
+    refreshAdminStats();
+  } catch (err) {
+    alert('حدث خطأ أثناء تعديل حالة الحساب: ' + err.message);
+  }
+};
+
+function handleAdminLogout() {
+  adminToken = '';
+  document.getElementById('admin-email').value = '';
+  document.getElementById('admin-password').value = '';
+  document.getElementById('admin-login-screen').style.display = 'block';
+  document.getElementById('admin-dashboard-screen').style.display = 'none';
+}
+
+// ==================== Upload Tab Handling ====================
+let currentUploadSource = 'local';
+
+window.switchUploadTab = function(tab) {
+  const localBtn = document.getElementById('tab-local');
+  const youtubeBtn = document.getElementById('tab-youtube');
+  const localContent = document.getElementById('tab-content-local');
+  const youtubeContent = document.getElementById('tab-content-youtube');
+  
+  if (tab === 'local') {
+    if (localBtn) {
+      localBtn.style.background = 'rgba(255,255,255,0.05)';
+      localBtn.style.borderColor = 'rgba(255,255,255,0.1)';
+      localBtn.style.color = '#fff';
+    }
+    if (youtubeBtn) {
+      youtubeBtn.style.background = 'transparent';
+      youtubeBtn.style.borderColor = 'transparent';
+      youtubeBtn.style.color = 'rgba(255,255,255,0.6)';
+    }
+    if (localContent) localContent.style.display = 'block';
+    if (youtubeContent) youtubeContent.style.display = 'none';
+    currentUploadSource = 'local';
+    
+    if (submitBtn) {
+      if (audioFile) {
+        submitBtn.disabled = false;
+      } else {
+        submitBtn.disabled = true;
+      }
+    }
+  } else {
+    if (youtubeBtn) {
+      youtubeBtn.style.background = 'rgba(255,255,255,0.05)';
+      youtubeBtn.style.borderColor = 'rgba(255,255,255,0.1)';
+      youtubeBtn.style.color = '#fff';
+    }
+    if (localBtn) {
+      localBtn.style.background = 'transparent';
+      localBtn.style.borderColor = 'transparent';
+      localBtn.style.color = 'rgba(255,255,255,0.6)';
+    }
+    if (localContent) localContent.style.display = 'none';
+    if (youtubeContent) youtubeContent.style.display = 'block';
+    currentUploadSource = 'youtube';
+    
+    const ytInput = document.getElementById('youtube-url-input');
+    const ytUrl = ytInput ? ytInput.value.trim() : '';
+    if (submitBtn) {
+      if (ytUrl) {
+        submitBtn.disabled = false;
+      } else {
+        submitBtn.disabled = true;
+      }
+    }
+  }
+};
+
+onDOMReady(() => {
+  const ytInput = document.getElementById('youtube-url-input');
+  if (ytInput) {
+    ytInput.addEventListener('input', function() {
+      if (currentUploadSource === 'youtube') {
+        submitBtn.disabled = !this.value.trim();
+      }
+    });
+  }
+});
+
+// ==================== Audio Dropzone Handling ====================
+const audioInput = document.getElementById('audio-input');
+const audioDropzone = document.getElementById('audio-dropzone');
+const audioLabel = document.getElementById('audio-label');
+
+if (audioInput) {
+  audioInput.addEventListener('change', function() {
+    if (this.files && this.files[0]) {
+      handleAudioSelect(this.files[0]);
+    }
+  });
+}
+
+if (audioDropzone) {
+  audioDropzone.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    this.classList.add('active');
+  });
+  audioDropzone.addEventListener('dragleave', function() {
+    if (!audioFile) this.classList.remove('active');
+  });
+  audioDropzone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleAudioSelect(e.dataTransfer.files[0]);
+      if (audioInput) audioInput.files = e.dataTransfer.files;
+    }
+  });
+}
+
+function handleAudioSelect(file) {
+  audioFile = file;
+  if (audioLabel) audioLabel.textContent = file.name;
+  if (audioDropzone) audioDropzone.classList.add('active');
+  if (submitBtn) submitBtn.disabled = false;
+}
+
+// ==================== Logo Upload & Preview Handling ====================
+const leftLogoInput = document.getElementById('left-logo-input');
+const rightLogoInput = document.getElementById('right-logo-input');
+const leftLogoContent = document.getElementById('left-logo-content');
+const rightLogoContent = document.getElementById('right-logo-content');
+
+if (leftLogoInput) {
+  leftLogoInput.addEventListener('change', function() {
+    if (this.files && this.files[0]) {
+      leftLogoFile = this.files[0];
+      if (leftLogoContent) showLogoPreview(leftLogoContent, leftLogoFile, 'left');
+      const reader = new FileReader();
+      reader.onload = (e) => { window.leftLogoBase64Global = e.target.result; };
+      reader.readAsDataURL(leftLogoFile);
+    }
+  });
+}
+
+if (rightLogoInput) {
+  rightLogoInput.addEventListener('change', function() {
+    if (this.files && this.files[0]) {
+      rightLogoFile = this.files[0];
+      if (rightLogoContent) showLogoPreview(rightLogoContent, rightLogoFile, 'right');
+      const reader = new FileReader();
+      reader.onload = (e) => { window.rightLogoBase64Global = e.target.result; };
+      reader.readAsDataURL(rightLogoFile);
+    }
+  });
+}
+
+function showLogoPreview(container, file, side) {
+  const url = URL.createObjectURL(file);
+  container.innerHTML = `
+    <img src="${url}" class="preview-thumbnail" alt="${side} logo preview" />
+    <button type="button" class="clear-btn" onclick="event.stopPropagation(); clearLogo('${side}')">&times;</button>
+  `;
+}
+
+window.clearLogo = function(side) {
+  if (side === 'left') {
+    leftLogoFile = null;
+    window.leftLogoBase64Global = null;
+    leftLogoInput.value = '';
+    leftLogoContent.innerHTML = `
+      <span class="file-box-icon">🖼️</span>
+      <span class="file-box-text">شعار أعلى اليسار</span>
+    `;
+  } else {
+    rightLogoFile = null;
+    window.rightLogoBase64Global = null;
+    rightLogoInput.value = '';
+    rightLogoContent.innerHTML = `
+      <span class="file-box-icon">🖼️</span>
+      <span class="file-box-text">شعار أعلى اليمين</span>
+    `;
+  }
+};
+
+// ==================== Animation Styles Selection & Synchronization ====================
+window.selectUploadAnimation = function(el) {
+  document.querySelectorAll('.upload-anim-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedAnimation = el.dataset.anim;
+  
+  // Sync to editor animation cards
+  const editorCard = document.querySelector(`.anim-card[data-anim="${selectedAnimation}"]`);
+  if (editorCard) {
+    document.querySelectorAll('.anim-card').forEach(c => c.classList.remove('selected'));
+    editorCard.classList.add('selected');
+  }
+};
+
+window.selectAnimation = function(el) {
+  document.querySelectorAll('.anim-card').forEach(c => c.classList.remove('selected'));
+  el.classList.add('selected');
+  selectedAnimation = el.dataset.anim;
+  
+  // Sync to upload animation cards
+  const uploadCard = document.querySelector(`.upload-anim-card[data-anim="${selectedAnimation}"]`);
+  if (uploadCard) {
+    document.querySelectorAll('.upload-anim-card').forEach(c => c.classList.remove('selected'));
+    uploadCard.classList.add('selected');
+  }
+};
+
+window.updateCaptionTop = function(val) {
+  captionTop = parseInt(val) || 65;
+  const valSpan = document.getElementById('caption-top-val');
+  if (valSpan) valSpan.textContent = `${captionTop}%`;
+  
+  const overlayContainer = document.getElementById('live-caption-overlay');
+  if (overlayContainer) {
+    overlayContainer.style.top = `${captionTop}%`;
+  }
+};
+
+function updateRangeLabel(id, value) {
+  const valSpan = document.getElementById(id + '-val');
+  if (valSpan) valSpan.textContent = value;
+}
+
+function bindSyncedInputs(id1, id2, isColor = false) {
+  const el1 = document.getElementById(id1);
+  const el2 = document.getElementById(id2);
+  if (!el1 || !el2) return;
+  
+  el1.addEventListener('input', function() {
+    el2.value = this.value;
+    updateRangeLabel(id1, this.value);
+    updateRangeLabel(id2, this.value);
+    if (isColor) {
+      const hexText = document.getElementById(id2 + '-hex');
+      if (hexText) hexText.textContent = this.value.toUpperCase();
+    }
+    el2.dispatchEvent(new Event('input'));
+  });
+  
+  el2.addEventListener('input', function() {
+    el1.value = this.value;
+    updateRangeLabel(id1, this.value);
+    updateRangeLabel(id2, this.value);
+    if (isColor) {
+      const hexText = document.getElementById(id1 + '-hex');
+      if (hexText) hexText.textContent = this.value.toUpperCase();
+    }
+    if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(currentTime);
+  });
+}
+
+// ==================== Global Title Toggle Handler ====================
+window.handleTitleToggle = function(e) {
+  if (e) {
+    if (e.target && e.target.id === 'show-title-toggle') {
+      window.toggleTitleFields(e.target.checked);
+      return;
+    }
+    e.preventDefault();
+  }
+  const chk = document.getElementById('show-title-toggle');
+  if (chk) {
+    chk.checked = !chk.checked;
+    window.toggleTitleFields(chk.checked);
+  }
+};
+
+window.toggleTitleFields = function(checked) {
+  const bg = document.getElementById('title-toggle-bg');
+  const knob = document.getElementById('title-toggle-knob');
+  const wrapper = document.getElementById('title-settings-wrapper');
+  const chk = document.getElementById('show-title-toggle');
+  if (chk) chk.checked = !!checked;
+  if (bg && knob && wrapper) {
+    if (checked) {
+      bg.style.backgroundColor = 'var(--purple-accent, #8b5cf6)';
+      knob.style.right = '24px';
+      knob.style.left = 'auto';
+      knob.style.transform = 'none';
+      wrapper.style.display = 'flex';
+    } else {
+      bg.style.backgroundColor = 'rgba(255,255,255,0.15)';
+      knob.style.right = '4px';
+      knob.style.left = 'auto';
+      knob.style.transform = 'none';
+      wrapper.style.display = 'none';
+    }
+  }
+  if (typeof updateLiveCaptionOverlay === 'function') {
+    try { updateLiveCaptionOverlay(currentTime); } catch(_) {}
+  }
+};
+
+// Binds all upload-side controls to editor-side controls
+onDOMReady(() => {
+  bindSyncedInputs('upload-active-color', 'active-color', true);
+  bindSyncedInputs('upload-inactive-color', 'inactive-color', true);
+  bindSyncedInputs('upload-bg-color', 'bg-color', true);
+  bindSyncedInputs('upload-stroke-color', 'stroke-color', true);
+  bindSyncedInputs('upload-shadow-color', 'shadow-color', true);
+  bindSyncedInputs('upload-font-size', 'font-size');
+  bindSyncedInputs('upload-bg-opacity', 'bg-opacity');
+  bindSyncedInputs('upload-sync-offset', 'sync-offset');
+  bindSyncedInputs('upload-word-spacing', 'word-spacing');
+  bindSyncedInputs('upload-bg-padding', 'bg-padding');
+  bindSyncedInputs('upload-stroke-width', 'stroke-width');
+  bindSyncedInputs('upload-shadow-blur', 'shadow-blur');
+
+  // Bind show-bg checkboxes
+  const uploadShowBg = document.getElementById('upload-show-bg');
+  const showBg = document.getElementById('show-bg');
+  if (uploadShowBg && showBg) {
+    uploadShowBg.addEventListener('change', function() {
+      showBg.checked = this.checked;
+      if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(currentTime);
+    });
+    showBg.addEventListener('change', function() {
+      uploadShowBg.checked = this.checked;
+      if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(currentTime);
+    });
+  }
+
+  // Initialize all range labels
+  ['upload-bg-opacity', 'upload-word-spacing', 'upload-bg-padding', 'upload-stroke-width', 'upload-shadow-blur', 'bg-opacity', 'word-spacing', 'bg-padding', 'stroke-width', 'shadow-blur'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) updateRangeLabel(id, el.value);
+  });
+
+  // Prefill Groq API Key if stored
+  const groqInput = document.getElementById('groq-api-key-input');
+  if (groqInput) {
+    const savedKey = localStorage.getItem('groq_api_key') || localStorage.getItem('groqApiKey') || '';
+    if (savedKey) groqInput.value = savedKey;
+    groqInput.addEventListener('input', function() {
+      localStorage.setItem('groq_api_key', this.value.trim());
+    });
+  }
+
+  // Prefill ElevenLabs API Key & Caption Engine if stored
+  const elInput = document.getElementById('elevenlabs-api-key-input');
+  if (elInput) {
+    const savedElKey = localStorage.getItem('elevenlabs_api_key') || '';
+    if (savedElKey) elInput.value = savedElKey;
+    elInput.addEventListener('input', function() {
+      localStorage.setItem('elevenlabs_api_key', this.value.trim());
+    });
+  }
+
+  // Prefill OpenRouter API Key if stored
+  const orInput = document.getElementById('openrouter-api-key');
+  if (orInput) {
+    const savedOrKey = localStorage.getItem('openrouterApiKey') || localStorage.getItem('openrouterKey') || '';
+    if (savedOrKey) orInput.value = savedOrKey;
+    orInput.addEventListener('input', function() {
+      localStorage.setItem('openrouterApiKey', this.value.trim());
+      localStorage.setItem('openrouterKey', this.value.trim());
+    });
+  }
+
+  const engineSelect = document.getElementById('caption-engine-select');
+  if (engineSelect) {
+    const savedEngine = localStorage.getItem('caption_engine') || 'v1';
+    engineSelect.value = savedEngine;
+    engineSelect.addEventListener('change', function() {
+      localStorage.setItem('caption_engine', this.value);
+      if (typeof window.toggleEngineFields === 'function') window.toggleEngineFields();
+    });
+  }
+
+  window.toggleEngineFields = function() {
+    const groqWrapper = document.getElementById('groq-key-wrapper');
+    const elevenlabsWrapper = document.getElementById('elevenlabs-key-wrapper');
+    const openrouterWrapper = document.getElementById('openrouter-key-wrapper');
+    if (groqWrapper) groqWrapper.style.display = 'none';
+    if (elevenlabsWrapper) elevenlabsWrapper.style.display = 'none';
+    if (openrouterWrapper) openrouterWrapper.style.display = 'none';
+  };
+
+  // Run toggle once initially
+  setTimeout(() => {
+    if (typeof window.toggleEngineFields === 'function') window.toggleEngineFields();
+  }, 200);
+
+  // Initialize Title Overlay controls in DOMContentLoaded
+  const durationInput = document.getElementById('title-duration-input');
+  if (durationInput) {
+    durationInput.addEventListener('input', function() {
+      const valSpan = document.getElementById('title-duration-val');
+      if (valSpan) valSpan.textContent = parseFloat(this.value) === 0 ? "0.0 (طوال الفيديو)" : this.value;
+    });
+  }
+
+  const topInput = document.getElementById('title-top-input');
+  if (topInput) {
+    topInput.addEventListener('input', function() {
+      const valSpan = document.getElementById('title-top-val');
+      if (valSpan) valSpan.textContent = this.value;
+    });
+  }
+
+  const colorInput = document.getElementById('title-color-input');
+  if (colorInput) {
+    colorInput.addEventListener('input', function() {
+      const hexSpan = document.getElementById('title-color-hex');
+      if (hexSpan) hexSpan.textContent = this.value.toUpperCase();
+    });
+  }
+
+  const bgColorInput = document.getElementById('title-bg-color-input');
+  if (bgColorInput) {
+    bgColorInput.addEventListener('input', function() {
+      const hexSpan = document.getElementById('title-bg-hex');
+      if (hexSpan) hexSpan.textContent = this.value.toUpperCase();
+    });
+  }
+
+  // Ensure title toggle is synced to its initial state
+  const initialTitleChk = document.getElementById('show-title-toggle');
+  if (initialTitleChk) {
+    window.toggleTitleFields(initialTitleChk.checked);
+  }
+
+  // Open Admin modal if hash is #admin or url contains ?admin
+  if (window.location.hash === '#admin' || (window.location.search && window.location.search.includes('admin'))) {
+    openAdminModal();
+  }
+});
+
+window.syncShowBg = function(el) {
+  const uploadShowBg = document.getElementById('upload-show-bg');
+  const showBg = document.getElementById('show-bg');
+  if (uploadShowBg) uploadShowBg.checked = el.checked;
+  if (showBg) showBg.checked = el.checked;
+  if (typeof updateLiveCaptionOverlay === 'function') {
+    try { updateLiveCaptionOverlay(currentTime); } catch (_) {}
+  }
+};
+
+// ==================== Color Pickers Casing & Live Updates ====================
+const activeColorEl = document.getElementById('active-color');
+if (activeColorEl) {
+  activeColorEl.addEventListener('input', function() {
+    const hex = document.getElementById('active-color-hex');
+    if (hex) hex.textContent = this.value.toUpperCase();
+    if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(currentTime);
+  });
+}
+const inactiveColorEl = document.getElementById('inactive-color');
+if (inactiveColorEl) {
+  inactiveColorEl.addEventListener('input', function() {
+    const hex = document.getElementById('inactive-color-hex');
+    if (hex) hex.textContent = this.value.toUpperCase();
+    if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(currentTime);
+  });
+}
+const bgColorEl = document.getElementById('bg-color');
+if (bgColorEl) {
+  bgColorEl.addEventListener('input', function() {
+    const hex = document.getElementById('bg-color-hex');
+    if (hex) hex.textContent = this.value.toUpperCase();
+    if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(currentTime);
+  });
+}
+if (document.getElementById('stroke-color')) {
+  document.getElementById('stroke-color').addEventListener('input', function() {
+    if (document.getElementById('stroke-color-hex')) document.getElementById('stroke-color-hex').textContent = this.value.toUpperCase();
+    if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(currentTime);
+  });
+}
+if (document.getElementById('shadow-color')) {
+  document.getElementById('shadow-color').addEventListener('input', function() {
+    if (document.getElementById('shadow-color-hex')) document.getElementById('shadow-color-hex').textContent = this.value.toUpperCase();
+    if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(currentTime);
+  });
+}
+
+// Other styling changes trigger live refresh
+['font-size', 'bg-opacity', 'word-spacing', 'bg-padding', 'stroke-width', 'shadow-blur'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) {
+    el.addEventListener('input', () => {
+      if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(currentTime);
+    });
+  }
+});
+
+// ==================== Advanced Settings panel toggler ====================
+window.toggleAdvanced = function() {
+  const panel = document.getElementById('advanced-panel');
+  panel.classList.toggle('hidden');
+};
+
+// ==================== View State Managers ====================
+function showState(visibleElement) {
+  [uploadState, loadingState, successState, errorState].forEach(el => {
+    el.classList.add('hidden');
+  });
+  visibleElement.classList.remove('hidden');
+}
+
+window.resetApp = function() {
+  // Clear file states
+  audioFile = null;
+  audioInput.value = '';
+  audioLabel.textContent = 'قم بسحب ملف الصوت أو الفيديو هنا أو انقر للاختيار';
+  audioDropzone.classList.remove('active');
+  
+  const ytInput = document.getElementById('youtube-url-input');
+  if (ytInput) ytInput.value = '';
+  switchUploadTab('local');
+  
+  submitBtn.disabled = true;
+  
+  clearLogo('left');
+  clearLogo('right');
+  
+  transcribeData = null;
+  activeSegmentIndex = -1;
+  currentTime = 0;
+  
+  // Hide editor, show main dashboard
+  document.getElementById('editor-state').classList.add('hidden');
+  document.getElementById('main-dashboard').classList.remove('hidden');
+  
+  showState(uploadState);
+};
+
+// Helper to convert hex to rgb for background opacity
+function hexToRgb(hex) {
+  const cleanHex = hex.replace('#', '');
+  const r = parseInt(cleanHex.substring(0, 2), 16) || 0;
+  const g = parseInt(cleanHex.substring(2, 4), 16) || 0;
+  const b = parseInt(cleanHex.substring(4, 6), 16) || 0;
+  return `${r}, ${g}, ${b}`;
+}
+
+// ==================== Silence/Snooze Check Helper ====================
+function isSpeaking(segment, time) {
+  if (!segment || !segment.words || segment.words.length === 0) return false;
+  return segment.words.some(w => time >= (w.start - 0.05) && time <= (w.end + 0.05));
+}
+
+// ==================== Media Player & Live Caption Overlay ====================
+function initMediaPlayer() {
+  const wrapper = document.getElementById('preview-wrapper');
+  if (!wrapper || !transcribeData) return;
+  
+  const mediaUrl = `${apiUrl}/public/${transcribeData.audioPath}`;
+  
+  let mediaHtml = '';
+  if (transcribeData.videoPath) {
+    wrapper.classList.remove('audio-mode');
+    mediaHtml = `
+      <video id="media-player" src="${mediaUrl}" class="preview-media-element" controls></video>
+    `;
+  } else {
+    wrapper.classList.add('audio-mode');
+    mediaHtml = `
+      <div class="audio-equalizer-dots" style="margin-top: 20px;">
+        <div class="audio-equalizer-dot"></div>
+        <div class="audio-equalizer-dot"></div>
+        <div class="audio-equalizer-dot"></div>
+        <div class="audio-equalizer-dot"></div>
+      </div>
+      <audio id="media-player" src="${mediaUrl}" controls style="width: 90%; margin-bottom: 20px;"></audio>
+    `;
+  }
+  
+  mediaHtml += `
+    <div id="live-caption-overlay" class="hidden" style="
+      position: absolute;
+      top: ${captionTop}%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: max-content;
+      max-width: 95%;
+      background: rgba(0, 0, 0, 0.61);
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+      border: none;
+      border-radius: 4px;
+      padding: 4px 8px;
+      text-align: center;
+      pointer-events: none;
+      z-index: 10;
+      direction: rtl;
+      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+      font-size: 16px;
+      font-weight: 800;
+      font-family: 'Cairo', sans-serif;
+      line-height: 1.5;
+      display: flex;
+      flex-wrap: nowrap;
+      white-space: nowrap;
+      justify-content: center;
+    "></div>
+  `;
+  
+  wrapper.innerHTML = mediaHtml;
+  
+  const player = document.getElementById('media-player');
+  player.addEventListener('timeupdate', function() {
+    updateActiveSegment(this.currentTime);
+  });
+
+  if (transcribeData.videoPath && player) {
+    player.style.cursor = 'pointer';
+    player.addEventListener('click', function(e) {
+      const rect = this.getBoundingClientRect();
+      const clickY = e.clientY - rect.top;
+      if (clickY > rect.height - 50) {
+        return;
+      }
+      e.preventDefault();
+      if (this.paused) {
+        this.play();
+      } else {
+        this.pause();
+      }
+    });
+  }
+}
+
+function updateActiveSegment(time) {
+  if (!transcribeData) return;
+  
+  // Apply the syncOffset to the player's time for the caption overlay!
+  const syncOffset = parseFloat(document.getElementById('sync-offset').value) || 0;
+  const adjustedTime = time + syncOffset;
+  
+  currentTime = adjustedTime;
+  let newActiveIndex = -1;
+  for (let i = 0; i < transcribeData.segments.length; i++) {
+    const seg = transcribeData.segments[i];
+    if (adjustedTime >= seg.start && adjustedTime <= seg.end) {
+      newActiveIndex = i;
+      break;
+    }
+  }
+  
+  if (newActiveIndex !== activeSegmentIndex) {
+    activeSegmentIndex = newActiveIndex;
+    
+    // Highlight active card
+    document.querySelectorAll('.segment-card').forEach((card, idx) => {
+      if (idx === activeSegmentIndex) {
+        card.classList.add('active');
+        
+        // Smoothly auto-scroll this card into center view inside the right-side container
+        const container = document.querySelector('.workspace-right');
+        if (container) {
+          const cardTop = card.offsetTop;
+          const containerHeight = container.clientHeight;
+          const cardHeight = card.offsetHeight;
+          
+          container.scrollTo({
+            top: cardTop - (containerHeight / 2) + (cardHeight / 2),
+            behavior: 'smooth'
+          });
+        }
+      } else {
+        card.classList.remove('active');
+      }
+    });
+
+  }
+  
+  // Update live caption overlay with adjusted time
+  updateLiveCaptionOverlay(adjustedTime);
+}
+
+function updateLiveCaptionOverlay(time) {
+  const overlayContainer = document.getElementById('live-caption-overlay');
+  if (!overlayContainer) return;
+  
+  if ((typeof selectedAnimation !== 'undefined' && selectedAnimation === 'none') || activeSegmentIndex === -1 || !transcribeData) {
+    overlayContainer.classList.add('hidden');
+    overlayContainer.removeAttribute('data-rendered-key');
+    return;
+  }
+  
+  const segment = transcribeData.segments[activeSegmentIndex];
+  
+  overlayContainer.classList.remove('hidden');
+  const activeColor = document.getElementById('active-color').value;
+  const inactiveColor = document.getElementById('inactive-color').value;
+  
+  // Read dynamic style customizations
+  const fontSize = parseFloat(document.getElementById('font-size').value) || 50;
+  const bgColor = document.getElementById('bg-color').value;
+  const bgOpacity = parseFloat(document.getElementById('bg-opacity').value) || 86;
+  const wordSpacing = parseFloat(document.getElementById('word-spacing').value) || 31;
+  const bgPadding = parseFloat(document.getElementById('bg-padding').value) || 8;
+  const removeBg = document.getElementById('show-bg').checked;
+  const isBgVisible = !removeBg && bgOpacity > 0;
+  
+  // Apply styles to overlay container dynamically
+  overlayContainer.style.top = `${captionTop}%`;
+  overlayContainer.style.fontSize = `${fontSize / 4.5}px`;
+  overlayContainer.style.flexWrap = 'nowrap';
+  overlayContainer.style.whiteSpace = 'nowrap';
+  overlayContainer.style.columnGap = `${wordSpacing / 100}em`;
+  overlayContainer.style.maxWidth = '95%';
+  
+  if (isBgVisible) {
+    overlayContainer.style.background = `rgba(${hexToRgb(bgColor)}, ${bgOpacity / 100})`;
+    overlayContainer.style.backdropFilter = 'none';
+    overlayContainer.style.webkitBackdropFilter = 'none';
+    overlayContainer.style.border = 'none'; // Clean sharp rectangular edge
+    overlayContainer.style.boxShadow = '0 8px 24px rgba(0, 0, 0, 0.5)';
+    overlayContainer.style.padding = `${bgPadding / 4.5}px ${(bgPadding * 2) / 4.5}px`;
+    overlayContainer.style.borderRadius = `${4 / 4.5}px`; // tight corners scaled by 4.5
+  } else {
+    overlayContainer.style.background = 'none';
+    overlayContainer.style.backdropFilter = 'none';
+    overlayContainer.style.webkitBackdropFilter = 'none';
+    overlayContainer.style.border = 'none';
+    overlayContainer.style.boxShadow = 'none';
+    overlayContainer.style.padding = '0';
+    overlayContainer.style.borderRadius = '0';
+  }
+  
+  const strokeColor = document.getElementById('stroke-color') ? document.getElementById('stroke-color').value : '#000000';
+  const strokeWidth = document.getElementById('stroke-width') ? parseFloat(document.getElementById('stroke-width').value) : 3;
+  const shadowColor = document.getElementById('shadow-color') ? document.getElementById('shadow-color').value : '#000000';
+  const shadowBlur = document.getElementById('shadow-blur') ? parseFloat(document.getElementById('shadow-blur').value) : 10;
+
+  const scaledStrokeWidth = (strokeWidth / 3.5).toFixed(1);
+  const scaledShadowBlur = (shadowBlur / 3.5).toFixed(1);
+
+  let outlineStroke = '';
+  if (strokeWidth > 0 || shadowBlur > 0) {
+    const strokePart = strokeWidth > 0 ? `-webkit-text-stroke: ${scaledStrokeWidth}px ${strokeColor};` : '';
+    const shadowPart = shadowBlur > 0 ? `text-shadow: 0px 2px ${scaledShadowBlur}px ${shadowColor};` : '';
+    outlineStroke = `${strokePart} ${shadowPart}`;
+  } else {
+    outlineStroke = isBgVisible 
+      ? 'text-shadow: 1.5px 1.5px 0px #000000, -1.5px -1.5px 0px #000000, 1.5px -1.5px 0px #000000, -1.5px 1.5px 0px #000000;'
+      : 'text-shadow: 1px 1px 0px #000000, -1px -1px 0px #000000;';
+  }
+
+  // React-style state key to avoid destroying the DOM and breaking slide-up transitions
+  const styleKey = `${activeSegmentIndex}_${selectedAnimation}_${fontSize}_${bgColor}_${bgOpacity}_${wordSpacing}_${bgPadding}_${!removeBg}_${activeColor}_${inactiveColor}_${strokeColor}_${strokeWidth}_${shadowColor}_${shadowBlur}`;
+  const isNewSegment = overlayContainer.getAttribute('data-rendered-key') !== styleKey;
+
+  if (selectedAnimation === 'slide') {
+    overlayContainer.style.overflow = 'hidden';
+  } else {
+    overlayContainer.style.overflow = 'visible';
+  }
+
+  if (isNewSegment) {
+    overlayContainer.setAttribute('data-rendered-key', styleKey);
+    let html = '';
+    segment.words.forEach(w => {
+      const isWordActive = time >= w.start && time <= w.end;
+      const color = isWordActive ? activeColor : inactiveColor;
+      
+      let translateY = 0;
+      let opacity = 1;
+      let transitionStr = 'none';
+      
+      if (selectedAnimation === 'reveal') {
+        const isPast = time > w.end;
+        if (isWordActive || isPast) {
+          translateY = 0;
+          opacity = 1;
+          transitionStr = 'transform 0.25s cubic-bezier(0.3, 1.5, 0.5, 1), opacity 0.2s ease-out';
+        } else {
+          translateY = 3.3; // 15px scaled by 4.5
+          opacity = 0;
+          transitionStr = 'none';
+        }
+      }
+      
+      const transformStr = selectedAnimation === 'reveal' ? `transform: translateY(${translateY}px);` : '';
+      const opacityStr = selectedAnimation === 'reveal' ? `opacity: ${opacity};` : '';
+      const transitionStyleStr = selectedAnimation === 'reveal' ? `transition: ${transitionStr};` : '';
+      
+      html += `<span class="caption-word" style="color: ${color}; ${outlineStroke} display: inline-block; ${transformStr} ${opacityStr} ${transitionStyleStr}">${w.word}</span>`;
+    });
+    
+    if (selectedAnimation === 'slide') {
+      const activeDuration = time - segment.start;
+      const progress = Math.min(1, Math.max(0, activeDuration / 0.35));
+      const easeOutQuart = (x) => 1 - Math.pow(1 - x, 4);
+      const t = easeOutQuart(progress);
+      const translateY = 100 * (1 - t);
+      const opacity = progress === 0 ? 0 : 1;
+
+      overlayContainer.innerHTML = `<div class="slide-wrapper" style="
+        display: flex;
+        flex-wrap: nowrap;
+        white-space: nowrap;
+        justify-content: center;
+        column-gap: ${wordSpacing / 100}em;
+        transform: translateY(${translateY}%);
+        opacity: ${opacity};
+        transition: transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease-out;
+      ">${html}</div>`;
+    } else {
+      overlayContainer.innerHTML = `<div style="
+        display: flex;
+        flex-wrap: nowrap;
+        white-space: nowrap;
+        justify-content: center;
+        column-gap: ${wordSpacing / 100}em;
+      ">${html}</div>`;
+    }
+  } else {
+    // Fast in-place DOM updates: update words highlights & reveal transitions smoothly without resetting keyframe animations
+    const spans = overlayContainer.querySelectorAll('.caption-word');
+    segment.words.forEach((w, idx) => {
+      const span = spans[idx];
+      if (span) {
+        const isWordActive = time >= w.start && time <= w.end;
+        const isPast = time > w.end;
+        const color = isWordActive ? activeColor : inactiveColor;
+        
+        span.style.color = color;
+        
+        if (selectedAnimation === 'reveal') {
+          let translateY = 3.3;
+          let opacity = 0;
+          let transitionStr = 'none';
+          if (isWordActive || isPast) {
+            translateY = 0;
+            opacity = 1;
+            transitionStr = 'transform 0.25s cubic-bezier(0.3, 1.5, 0.5, 1), opacity 0.2s ease-out';
+          }
+          span.style.transform = `translateY(${translateY}px)`;
+          span.style.opacity = opacity;
+          span.style.transition = transitionStr;
+        }
+      }
+    });
+
+    if (selectedAnimation === 'slide') {
+      const slideWrapper = overlayContainer.querySelector('.slide-wrapper');
+      if (slideWrapper) {
+        const activeDuration = time - segment.start;
+        const progress = Math.min(1, Math.max(0, activeDuration / 0.35));
+        const easeOutQuart = (x) => 1 - Math.pow(1 - x, 4);
+        const t = easeOutQuart(progress);
+        const translateY = 100 * (1 - t);
+        const opacity = progress === 0 ? 0 : 1;
+
+        slideWrapper.style.transform = `translateY(${translateY}%)`;
+        slideWrapper.style.opacity = opacity;
+        slideWrapper.style.transition = 'transform 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s ease-out';
+      }
+    }
+  }
+}
+
+// ==================== Segment Cards Rendering & Event Handling ====================
+function renderSegmentCards() {
+  const container = document.getElementById('editor-segments');
+  if (!container || !transcribeData) return;
+  
+  let html = '';
+  transcribeData.segments.forEach((seg, idx) => {
+    html += `
+      <div id="segment-card-${idx}" class="segment-card">
+        <div class="segment-card-header">
+          <span class="segment-time-badge">⏱️ ${seg.start.toFixed(2)} - ${seg.end.toFixed(2)}</span>
+          <button type="button" class="segment-play-btn" onclick="seekPlayer(${seg.start})">
+            🎧 تشغيل هذه الجملة
+          </button>
+        </div>
+        <textarea class="segment-textarea" oninput="handleSegmentChange(${idx}, this.value)">${seg.text}</textarea>
+      </div>
+    `;
+  });
+  
+  container.innerHTML = html;
+}
+
+window.seekPlayer = function(startTime) {
+  const player = document.getElementById('media-player');
+  if (player) {
+    player.currentTime = startTime;
+    player.play();
+  }
+};
+
+window.handleSegmentChange = function(index, newText) {
+  if (!transcribeData) return;
+  
+  const seg = transcribeData.segments[index];
+  seg.text = newText;
+  
+  // Recalculate word-level timestamps (linear interpolation)
+  const words = newText.split(/\s+/).filter(w => w.trim() !== "");
+  const duration = seg.end - seg.start;
+  seg.words = words.map((w, i) => {
+    const start = seg.start + (i * duration) / Math.max(1, words.length);
+    const end = seg.start + ((i + 1) * duration) / Math.max(1, words.length);
+    return {
+      word: w,
+      start: parseFloat(start.toFixed(3)),
+      end: parseFloat(end.toFixed(3))
+    };
+  });
+  
+  // Update the live caption overlay immediately if this is the active segment
+  if (index === activeSegmentIndex) {
+    updateLiveCaptionOverlay(currentTime);
+  }
+};
+
+// ==================== Enter Key Split Handling ====================
+function handleSegmentSplit(index, cursorPosition, fullText) {
+  if (!transcribeData) return;
+  
+  const seg = transcribeData.segments[index];
+  if (!seg.words || seg.words.length <= 1) return; // Cannot split if 0 or 1 word
+  
+  // 1. Determine how many words are before the cursor
+  const textBefore = fullText.substring(0, cursorPosition);
+  const wordsBefore = textBefore.trim().split(/\s+/).filter(w => w !== "");
+  const splitIndex = wordsBefore.length;
+  
+  // Only split if we have a valid split point
+  if (splitIndex <= 0 || splitIndex >= seg.words.length) return;
+  
+  // 2. Split the words array
+  const wordsA = seg.words.slice(0, splitIndex);
+  const wordsB = seg.words.slice(splitIndex);
+  
+  // 3. Create two new segments (retaining exact word timestamps)
+  const segA = {
+    start: seg.start,
+    end: wordsA[wordsA.length - 1].end,
+    text: wordsA.map(w => w.word).join(" "),
+    words: wordsA
+  };
+  
+  const segB = {
+    start: wordsB[0].start,
+    end: seg.end,
+    text: wordsB.map(w => w.word).join(" "),
+    words: wordsB
+  };
+  
+  // 4. Replace the old segment with the two new segments
+  transcribeData.segments.splice(index, 1, segA, segB);
+  
+  // 5. Re-render the segment cards
+  renderSegmentCards();
+  
+  // 6. Focus the second segment's textarea at the beginning of the text
+  setTimeout(() => {
+    const nextTextarea = document.querySelector(`#segment-card-${index + 1} .segment-textarea`);
+    if (nextTextarea) {
+      nextTextarea.focus();
+      nextTextarea.setSelectionRange(0, 0);
+    }
+  }, 50);
+}
+
+// Add event delegation for Enter key split on segment textareas
+const editorSegmentsEl = document.getElementById('editor-segments');
+if (editorSegmentsEl) {
+  editorSegmentsEl.addEventListener('keydown', function(e) {
+    if (e.target.classList.contains('segment-textarea') && e.key === 'Enter') {
+      e.preventDefault(); // Prevent inserting actual newline character
+      
+      const textarea = e.target;
+      const card = textarea.closest('.segment-card');
+      if (card) {
+        const index = parseInt(card.id.replace('segment-card-', ''));
+        handleSegmentSplit(index, textarea.selectionStart, textarea.value);
+      }
+    }
+  });
+}
+
+// ==================== Resilient Polling & Download Utilities ====================
+async function pollRenderStatusResilient(targetApiUrl, taskId, onProgress, maxConsecutiveErrors = 15) {
+  let consecutiveErrors = 0;
+  while (true) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const statusRes = await fetch(`${targetApiUrl}/api/render-status/${taskId}`);
+      if (!statusRes.ok) {
+        throw new Error(`Server returned status ${statusRes.status}`);
+      }
+      const data = await statusRes.json();
+      consecutiveErrors = 0;
+      
+      if (data.status === 'success') {
+        return data;
+      } else if (data.status === 'failed') {
+        throw new Error(data.error || 'فشلت عملية الرندرة على السيرفر.');
+      }
+      if (typeof onProgress === 'function' && data.progress) {
+        onProgress(data.progress);
+      }
+    } catch (err) {
+      if (err.message && err.message.includes('فشلت عملية الرندرة')) {
+        throw err;
+      }
+      consecutiveErrors++;
+      console.warn(`[Render Poll] Transient network glitch for task ${taskId} (${consecutiveErrors}/${maxConsecutiveErrors}):`, err.message);
+      if (consecutiveErrors >= maxConsecutiveErrors) {
+        throw new Error(`انقطع الاتصال بالسيرفر أثناء متابعة الرندرة: ${err.message}`);
+      }
+      await new Promise(r => setTimeout(r, 1500));
+    }
+  }
+}
+
+function downloadBlobViaXhr(url, timeoutMs = 90000) {
+  return new Promise((resolve, reject) => {
+    try {
+      if (typeof XMLHttpRequest === 'undefined') {
+        return reject(new Error('XMLHttpRequest not available'));
+      }
+      const xhr = new XMLHttpRequest();
+      xhr.open('GET', url, true);
+      xhr.responseType = 'blob';
+      xhr.timeout = timeoutMs;
+      xhr.onload = function() {
+        if ((xhr.status >= 200 && xhr.status < 300) || xhr.status === 206) {
+          const blob = xhr.response;
+          if (blob && (blob.size > 1000 || blob.length > 1000)) {
+            resolve(blob);
+          } else {
+            reject(new Error(`XHR returned empty/small blob (${blob ? blob.size : 0} bytes)`));
+          }
+        } else {
+          reject(new Error(`XHR HTTP error ${xhr.status}`));
+        }
+      };
+      xhr.onerror = function() {
+        reject(new Error('XHR network error'));
+      };
+      xhr.ontimeout = function() {
+        reject(new Error('XHR request timed out'));
+      };
+      xhr.send();
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+async function downloadBlobViaFetch(url, timeoutMs = 90000) {
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const res = await fetch(url, {
+      cache: 'no-store',
+      headers: { 'Range': 'bytes=0-' },
+      signal: controller ? controller.signal : undefined
+    });
+    if (timeoutId) clearTimeout(timeoutId);
+    if (!res.ok && res.status !== 206) {
+      throw new Error(`HTTP error ${res.status}`);
+    }
+    const blob = await res.blob();
+    if (blob && (blob.size > 1000 || blob.length > 1000)) {
+      return blob;
+    }
+    throw new Error('Fetched blob is empty or corrupted');
+  } catch (err) {
+    if (timeoutId) clearTimeout(timeoutId);
+    throw err;
+  }
+}
+
+async function downloadVideoBlobWithRetry(videoUrl, maxRetries = 6) {
+  let lastErr = null;
+  
+  let altUrl = null;
+  if (videoUrl.includes('/public/temp_')) {
+    altUrl = videoUrl.replace(/\/public\/temp_([a-zA-Z0-9\-]+)\//, '/api/download-temp/$1/');
+  } else if (videoUrl.includes('/api/download-temp/')) {
+    altUrl = videoUrl.replace(/\/api\/download-temp\/([a-zA-Z0-9\-]+)\//, '/public/temp_$1/');
+  }
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    const urlsToTry = [videoUrl];
+    if (altUrl && attempt >= 2 && !urlsToTry.includes(altUrl)) {
+      urlsToTry.push(altUrl);
+    }
+
+    for (const targetUrl of urlsToTry) {
+      try {
+        const blob = await downloadBlobViaFetch(targetUrl, 90000);
+        return blob;
+      } catch (fErr) {
+        lastErr = fErr;
+      }
+
+      try {
+        const blob = await downloadBlobViaXhr(targetUrl, 90000);
+        return blob;
+      } catch (xErr) {
+        lastErr = xErr;
+      }
+    }
+
+    console.warn(`[Video Download] Attempt ${attempt}/${maxRetries} failed:`, lastErr?.message || 'unknown');
+    if (attempt < maxRetries) {
+      await new Promise(r => setTimeout(r, Math.min(attempt * 2000, 6000)));
+    }
+  }
+  throw new Error(`فشل تنزيل ملف الفيديو بعد ${maxRetries} محاولات: ${lastErr?.message || 'خطأ في الاتصال'}`);
+}
+
+// ==================== Form submission & API handling ====================
+if (formControls) {
+  formControls.addEventListener('submit', async function(e) {
+  e.preventDefault();
+
+  if (!window.ensureUserAuthenticated()) {
+    return;
+  }
+
+  const youtubeUrlInput = document.getElementById('youtube-url-input');
+  const youtubeUrl = youtubeUrlInput ? youtubeUrlInput.value.trim() : '';
+
+  if (currentUploadSource === 'local' && !audioFile) {
+    showState(errorState);
+    errorMsg.textContent = 'يرجى اختيار ملف صوت أو فيديو أولاً لتوليد المقطع!';
+    return;
+  }
+  if (currentUploadSource === 'youtube' && !youtubeUrl) {
+    showState(errorState);
+    errorMsg.textContent = 'يرجى إدخال رابط فيديو يوتيوب صالح!';
+    return;
+  }
+
+  const originalSubmitText = submitBtn.innerHTML;
+  submitBtn.disabled = true;
+  submitBtn.style.opacity = '0.5';
+  submitBtn.style.pointerEvents = 'none';
+  submitBtn.innerHTML = '<span>⏳</span> جاري المعالجة...';
+
+  showState(loadingState);
+  
+  const progressBarFill = document.getElementById('progress-bar-fill');
+  const progressTextLabel = document.getElementById('progress-text-label');
+  
+  progressBarFill.style.width = '0%';
+  progressTextLabel.textContent = 'جاري التحميل والمعالجة...';
+  progressMsg.textContent = currentUploadSource === 'youtube' 
+    ? 'جاري تنزيل صوت اليوتيوب بالخلفية بدقة عالية...'
+    : 'جاري تهيئة الملف والرفع...';
+
+  // Build FormData payload for transcribe
+  const fd = new FormData();
+  if (currentUploadSource === 'local') {
+    fd.append('audio', audioFile);
+  } else {
+    fd.append('youtubeUrl', youtubeUrl);
+  }
+  if (leftLogoFile) fd.append('leftLogo', leftLogoFile);
+  if (rightLogoFile) fd.append('rightLogo', rightLogoFile);
+  fd.append('minWords', document.getElementById('min-words').value);
+  fd.append('maxWords', document.getElementById('max-words').value);
+  fd.append('animation', selectedAnimation);
+  fd.append('activeColor', document.getElementById('active-color').value);
+  fd.append('inactiveColor', document.getElementById('inactive-color').value);
+
+  const savedHfToken = localStorage.getItem('cohereHfToken') || '';
+  const cohereTokenInput = document.getElementById('cohere-hf-token');
+  const hfTokenVal = cohereTokenInput ? cohereTokenInput.value.trim() : savedHfToken;
+  if (hfTokenVal) fd.append('hfToken', hfTokenVal);
+
+  const savedOrKey = localStorage.getItem('openrouterApiKey') || localStorage.getItem('openrouterKey') || '';
+  const orInput = document.getElementById('openrouter-api-key') || document.getElementById('openrouter-key-input');
+  const openrouterKeyVal = orInput ? orInput.value.trim() : savedOrKey;
+  if (openrouterKeyVal) fd.append('openrouterKey', openrouterKeyVal);
+
+  const savedGroqKey = localStorage.getItem('groq_api_key') || localStorage.getItem('groqApiKey') || '';
+  const groqInput = document.getElementById('groq-api-key-input');
+  const groqKeyVal = groqInput ? groqInput.value.trim() : savedGroqKey;
+  if (groqKeyVal) {
+    localStorage.setItem('groq_api_key', groqKeyVal);
+    fd.append('groqApiKey', groqKeyVal);
+  }
+
+  const savedGeminiKey = localStorage.getItem('gemini_api_key') || localStorage.getItem('geminiApiKey') || '';
+  const gInput = document.getElementById('gemini-key-input');
+  const geminiKeyVal = gInput ? gInput.value.trim() : savedGeminiKey;
+  if (geminiKeyVal) fd.append('geminiApiKey', geminiKeyVal);
+
+  const engineSelect = document.getElementById('caption-engine-select');
+  const engineVal = engineSelect ? engineSelect.value : 'v1';
+  fd.append('captionEngine', engineVal);
+
+  const showTitleToggle = document.getElementById('show-title-toggle');
+  if (showTitleToggle) fd.append('showTitle', showTitleToggle.checked ? 'true' : 'false');
+
+  const titleTextInput = document.getElementById('title-text-input');
+  if (titleTextInput && titleTextInput.value.trim()) fd.append('titleText', titleTextInput.value.trim());
+
+  fd.append('titleSubtext', '');
+
+  const titleColorInput = document.getElementById('title-color-input');
+  if (titleColorInput) fd.append('titleColor', titleColorInput.value);
+
+  const titleBgColorInput = document.getElementById('title-bg-color-input');
+  if (titleBgColorInput) fd.append('titleBgColor', titleBgColorInput.value);
+
+  const titleDurationInput = document.getElementById('title-duration-input');
+  if (titleDurationInput) fd.append('titleDuration', titleDurationInput.value);
+
+  const titleTopInput = document.getElementById('title-top-input');
+  if (titleTopInput) fd.append('titleTop', titleTopInput.value || '14.0');
+
+  const titleStyleSelect = document.getElementById('title-style-select');
+  fd.append('titleStyle', (titleStyleSelect && titleStyleSelect.value) ? titleStyleSelect.value : 'split-contrast');
+
+  const savedElKey = localStorage.getItem('elevenlabs_api_key') || '';
+  const elKeyInput = document.getElementById('elevenlabs-api-key-input');
+  const elKeyVal = elKeyInput ? elKeyInput.value.trim() : savedElKey;
+  if (elKeyVal) {
+    localStorage.setItem('elevenlabs_api_key', elKeyVal);
+    fd.append('elevenLabsApiKey', elKeyVal);
+  }
+
+  let intervalId = null;
+
+  try {
+    const data = await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', apiUrl + '/api/transcribe');
+      xhr.timeout = 300000; // 5 minutes timeout for long video AI processing
+
+      xhr.ontimeout = function() {
+        reject(new Error('استغرقت معالجة الملف وقتاً طويلاً. يرجى المحاولة مرة أخرى أو تقليل حجم المقطع.'));
+      };
+
+      xhr.upload.onprogress = function(event) {
+        if (event.lengthComputable) {
+          const percent = Math.round((event.loaded / event.total) * 100);
+          progressBarFill.style.width = percent + '%';
+          progressTextLabel.textContent = `جاري الرفع: ${percent}%`;
+          progressMsg.textContent = `جاري رفع الملف... ${percent}%`;
+        }
+      };
+
+      xhr.onload = function() {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            resolve(JSON.parse(xhr.responseText));
+          } catch (e) {
+            reject(new Error('فشل قراءة استجابة السيرفر.'));
+          }
+        } else {
+          let errorMsg = 'حدث خطأ في معالجة الملف في السيرفر';
+          try {
+            const errData = JSON.parse(xhr.responseText);
+            errorMsg = errData.detail || errorMsg;
+          } catch (_) {}
+          reject(new Error(errorMsg));
+        }
+      };
+
+      xhr.onerror = function() {
+        reject(new Error('فشل الاتصال بالسيرفر. يرجى التحقق من تشغيل السيرفر أو الرابط.'));
+      };
+
+      // Send request
+      xhr.send(fd);
+
+      // Listen for when upload finishes to start the processing stage
+      xhr.upload.onload = function() {
+        progressBarFill.style.width = '5%';
+        progressTextLabel.textContent = 'التقدم: 5%';
+        progressMsg.textContent = 'تم الرفع بنجاح! جاري معالجة واستخراج الصوت...';
+        
+        let currentPercent = 5;
+        intervalId = setInterval(() => {
+          if (currentPercent < 95) {
+            currentPercent += Math.floor(Math.random() * 4) + 1;
+            if (currentPercent > 95) currentPercent = 95;
+            
+            progressBarFill.style.width = currentPercent + '%';
+            progressTextLabel.textContent = `التقدم: ${currentPercent}%`;
+            
+            if (currentPercent > 30 && currentPercent <= 65) {
+              progressMsg.textContent = 'جاري تنقيح وتحسين النص بالذكاء الاصطناعي...';
+            } else if (currentPercent > 65) {
+              progressMsg.textContent = 'جاري ترتيب التوقيت ومزامنة الكابشن مع الصوت...';
+            }
+          }
+        }, 1500);
+      };
+    });
+
+    if (intervalId) clearInterval(intervalId);
+    progressBarFill.style.width = '100%';
+    progressTextLabel.textContent = 'اكتمل!';
+
+    transcribeData = data;
+    
+    // Apply Gemini audio-corrected text to segments if available
+    if (transcribeData.audioCorrectedText && transcribeData.audioCorrectedText.trim()) {
+      const correctedLines = transcribeData.audioCorrectedText.trim().split('\n').map(l => l.trim()).filter(l => l);
+      if (correctedLines.length === transcribeData.segments.length) {
+        transcribeData.segments = transcribeData.segments.map((seg, i) => {
+          const newText = correctedLines[i];
+          const words = newText.split(/\s+/).filter(w => w.trim() !== '');
+          const duration = seg.end - seg.start;
+          const newWords = words.map((w, wi) => ({
+            word: w,
+            start: parseFloat((seg.start + (wi * duration) / Math.max(1, words.length)).toFixed(3)),
+            end: parseFloat((seg.start + ((wi + 1) * duration) / Math.max(1, words.length)).toFixed(3))
+          }));
+          return { ...seg, text: newText, words: newWords };
+        });
+      }
+    }
+    
+    // Hide main dashboard, show editor workspace
+    document.getElementById('main-dashboard').classList.add('hidden');
+    document.getElementById('editor-state').classList.remove('hidden');
+    
+    // Initialize editor view
+    initMediaPlayer();
+    renderSegmentCards();
+    playSuccessSound();
+    
+    // Track upload event
+    try {
+      trackAction('upload');
+      if (!currentUser) {
+        freeOpsCount++;
+        localStorage.setItem('free_ops_count', freeOpsCount);
+        updateAuthWidget();
+      }
+    } catch (_) {}
+
+    // Restore button state
+    submitBtn.disabled = false;
+    submitBtn.style.opacity = '';
+    submitBtn.style.pointerEvents = '';
+    submitBtn.innerHTML = originalSubmitText;
+
+  } catch (err) {
+    if (intervalId) clearInterval(intervalId);
+    showState(errorState);
+    errorMsg.textContent = err.message || 'فشل الاتصال بالسيرفر. يرجى التحقق من تشغيل السيرفر أو الرابط.';
+    
+    submitBtn.disabled = false;
+    submitBtn.style.opacity = '';
+    submitBtn.style.pointerEvents = '';
+    submitBtn.innerHTML = originalSubmitText;
+  }
+});
+}
+
+// ==================== Render final video from edits ====================
+let isRendering = false;
+
+window.renderVideo = async function() {
+  if (isRendering) return;
+  if (!transcribeData) return;
+
+  if (!window.ensureUserAuthenticated()) {
+    return;
+  }
+  
+  isRendering = true;
+
+  const renderBtn = document.getElementById('render-btn');
+  const originalRenderText = renderBtn ? renderBtn.innerHTML : '<span>🚀</span> توليد الفيديو النهائي';
+  if (renderBtn) {
+    renderBtn.disabled = true;
+    renderBtn.style.opacity = '0.5';
+    renderBtn.style.pointerEvents = 'none';
+    renderBtn.style.cursor = 'not-allowed';
+    renderBtn.innerHTML = '<span>⏳</span> جاري رندرة وتوليد الفيديو...';
+  }
+
+  // Transition back to main dashboard loading state
+  document.getElementById('editor-state').classList.add('hidden');
+  const mainDashboard = document.getElementById('main-dashboard');
+  mainDashboard.classList.remove('hidden');
+  
+  showState(loadingState);
+  
+  const progressBarFill = document.getElementById('progress-bar-fill');
+  const progressTextLabel = document.getElementById('progress-text-label');
+  
+  progressBarFill.style.width = '5%';
+  progressTextLabel.textContent = 'التقدم: 5%';
+  progressMsg.textContent = 'جاري معالجة وتوليد مقطع الفيديو النهائي...';
+  
+  let currentPercent = 5;
+  const renderIntervalId = setInterval(() => {
+    if (currentPercent < 95) {
+      currentPercent += Math.floor(Math.random() * 4) + 1;
+      if (currentPercent > 95) currentPercent = 95;
+      
+      progressBarFill.style.width = currentPercent + '%';
+      progressTextLabel.textContent = `التقدم: ${currentPercent}%`;
+      
+      if (currentPercent > 25 && currentPercent <= 55) {
+        progressMsg.textContent = 'جاري رسم الإطارات والتقاط لقطات الفيديو مع الكابشن...';
+      } else if (currentPercent > 55 && currentPercent <= 80) {
+        progressMsg.textContent = 'جاري دمج ملف الصوت وضغط المقطع بصيغة MP4...';
+      } else if (currentPercent > 80) {
+        progressMsg.textContent = 'جاري تصدير المقطع النهائي وتجهيزه للتحميل...';
+      }
+    }
+  }, 1500);
+  
+  const renderPayload = {
+    audioPath: transcribeData.audioPath,
+    videoPath: transcribeData.videoPath,
+    durationInSeconds: transcribeData.durationInSeconds,
+    segments: transcribeData.segments,
+    animationType: selectedAnimation,
+    activeColor: document.getElementById('active-color').value,
+    inactiveColor: document.getElementById('inactive-color').value,
+    leftLogo: window.leftLogoBase64Global || transcribeData.leftLogo || null,
+    rightLogo: window.rightLogoBase64Global || transcribeData.rightLogo || null,
+    fontSize: parseInt(document.getElementById('font-size').value) || 50,
+    bgColor: document.getElementById('bg-color').value,
+    bgOpacity: parseFloat(document.getElementById('bg-opacity').value) || 86,
+    syncOffset: parseFloat(document.getElementById('sync-offset') ? document.getElementById('sync-offset').value : 0),
+    wordSpacing: parseInt(document.getElementById('word-spacing').value) || 31,
+    bgPadding: parseInt(document.getElementById('bg-padding').value) || 8,
+    showBg: !document.getElementById('show-bg').checked,
+    captionTop: captionTop,
+    fontFamily: document.getElementById('font-family-select') ? document.getElementById('font-family-select').value : 'thmanyah',
+    customFontName: (document.getElementById('font-family-select') && document.getElementById('font-family-select').value === 'custom') ? customFontName : null,
+    customFontBase64: (document.getElementById('font-family-select') && document.getElementById('font-family-select').value === 'custom') ? customFontDataUrl : null,
+    strokeColor: document.getElementById('stroke-color') ? document.getElementById('stroke-color').value : '#000000',
+    strokeWidth: document.getElementById('stroke-width') ? parseInt(document.getElementById('stroke-width').value) : 0,
+    shadowColor: document.getElementById('shadow-color') ? document.getElementById('shadow-color').value : '#000000',
+    shadowBlur: document.getElementById('shadow-blur') ? parseInt(document.getElementById('shadow-blur').value) : 0,
+    showTitle: document.getElementById('show-title-toggle') ? document.getElementById('show-title-toggle').checked : false,
+    titleText: document.getElementById('title-text-input') ? document.getElementById('title-text-input').value.trim() : '',
+    titleSubtext: '',
+    titleColor: document.getElementById('title-color-input') ? document.getElementById('title-color-input').value : '#FFFFFF',
+    titleBgColor: document.getElementById('title-bg-color-input') ? document.getElementById('title-bg-color-input').value : '#000000',
+    titleDuration: document.getElementById('title-duration-input') ? parseFloat(document.getElementById('title-duration-input').value) : 6.5,
+    titleTop: document.getElementById('title-top-input') ? parseFloat(document.getElementById('title-top-input').value) : 14.0,
+    titleStyle: (document.getElementById('title-style-select') && document.getElementById('title-style-select').value) ? document.getElementById('title-style-select').value : 'split-contrast'
+  };
+  
+  try {
+    const startRes = await fetch(`${apiUrl}/api/render/${transcribeData.taskId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(renderPayload)
+    });
+    
+    if (!startRes.ok) {
+      let detail = 'حدث خطأ في طلب الرندرة من السيرفر';
+      try {
+        const json = await startRes.json();
+        detail = json.detail || detail;
+      } catch(_) {}
+      throw new Error(detail);
+    }
+    
+    const renderTaskStatus = await pollRenderStatusResilient(apiUrl, transcribeData.taskId);
+    
+    clearInterval(renderIntervalId);
+    
+    progressBarFill.style.width = '98%';
+    progressTextLabel.textContent = 'جاري تنزيل الفيديو المكتمل...';
+    progressMsg.textContent = 'جاري تنزيل الفيديو المكتمل...';
+    
+    const downloadUrl = `${apiUrl.replace(/\/$/, '')}/${renderTaskStatus.videoUrl.replace(/^\//, '')}`;
+    const blob = await downloadVideoBlobWithRetry(downloadUrl);
+    const url = URL.createObjectURL(blob);
+    
+    progressBarFill.style.width = '100%';
+    progressTextLabel.textContent = 'اكتمل!';
+    
+    outputVideo.src = url;
+    downloadLink.href = url;
+    showState(successState);
+    playSuccessSound();
+
+    // Populate Ready TikTok Caption box in success-state
+    try {
+      const currentTitleText = (document.getElementById('title-text-input') && document.getElementById('title-text-input').value.trim()) || '';
+      if (typeof generateSmartCaptionAndHashtags === 'function') {
+        const smartCap = generateSmartCaptionAndHashtags(currentTitleText);
+        const finalCaptionEl = document.getElementById('final-tiktok-caption-text');
+        if (finalCaptionEl) {
+          finalCaptionEl.value = smartCap.caption;
+        }
+      }
+    } catch (_) {}
+
+    // Auto-save to 48-Hour Video Archive (Persistent IndexedDB + LocalStorage)
+    if (typeof window.saveHistoryEntry === 'function') {
+      try {
+        const fullServerUrl = renderTaskStatus && renderTaskStatus.videoUrl 
+          ? `${apiUrl.replace(/\/$/, '')}/${renderTaskStatus.videoUrl.replace(/^\//, '')}`
+          : '';
+        await window.saveHistoryEntry({
+          title: 'فيديو كابشن نهائي (' + new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) + ')',
+          videoUrl: url,
+          serverUrl: fullServerUrl,
+          blob: blob
+        });
+      } catch (saveErr) {
+        console.warn('Auto-save main render to archive error:', saveErr);
+      }
+    }
+
+    // Track render event
+    try {
+      trackAction('render');
+      if (currentUser && window.firebaseDb) {
+        const userRef = window.firebaseDb.collection('users').doc(currentUser.uid);
+        await userRef.update({
+          renders_count: firebase.firestore.FieldValue.increment(1)
+        }).catch(e => console.warn(e));
+      } else if (!currentUser) {
+        freeOpsCount++;
+        localStorage.setItem('free_ops_count', freeOpsCount);
+        updateAuthWidget();
+      }
+    } catch (_) {}
+
+  } catch (err) {
+    if (typeof renderIntervalId !== 'undefined') clearInterval(renderIntervalId);
+    showState(errorState);
+    errorMsg.textContent = err.message || 'فشل رندرة الفيديو. يرجى المحاولة مرة أخرى.';
+  } finally {
+    isRendering = false;
+    if (renderBtn) {
+      renderBtn.disabled = false;
+      renderBtn.style.opacity = '';
+      renderBtn.style.pointerEvents = '';
+      renderBtn.style.cursor = '';
+      renderBtn.innerHTML = originalRenderText;
+    }
+  }
+};
+
+window.downloadSRT = function() {
+  if (!transcribeData || !transcribeData.segments) return;
+  
+  function formatTime(seconds) {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+    const milliseconds = Math.floor((seconds % 1) * 1000);
+    
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')},${milliseconds.toString().padStart(3, '0')}`;
+  }
+  
+  let srtContent = '';
+  transcribeData.segments.forEach((seg, idx) => {
+    const startStr = formatTime(seg.start);
+    const endStr = formatTime(seg.end);
+    srtContent += `${idx + 1}\n${startStr} --> ${endStr}\n${seg.text}\n\n`;
+  });
+  
+  const blob = new Blob([srtContent.trim()], { type: 'text/srt;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.setAttribute('download', 'rekaption_subtitles.srt');
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+// ==================== User Auth & Visitor Limits ====================
+let currentUser = null;
+let freeOpsCount = parseInt(localStorage.getItem('free_ops_count') || '0', 10);
+
+function updateAuthWidget() {
+  const widget = document.getElementById('user-auth-widget');
+  if (!widget) return;
+
+  if (currentUser) {
+    widget.innerHTML = `
+      ${currentUser.photoURL ? `<img src="${currentUser.photoURL}" alt="profile" style="width: 32px; height: 32px; border-radius: 50%; border: 2px solid var(--purple-accent);" />` : ''}
+      <div style="text-align: right;">
+        <div style="font-size: 13px; font-weight: 700; color: var(--text-main);">${currentUser.displayName || currentUser.email}</div>
+        <div style="font-size: 10px; color: var(--text-muted);">حساب مفعل ⚡</div>
+      </div>
+      <button 
+        type="button" 
+        onclick="triggerSignOut()"
+        style="margin: 0; padding: 6px 12px; font-size: 12px; border-radius: 20px; border: 1px solid #ef4444; color: #ef4444; background: rgba(239,68,68,0.05); cursor: pointer; transition: all 0.2s;"
+      >
+        تسجيل الخروج 🚪
+      </button>
+    `;
+  } else {
+    widget.innerHTML = `
+      <button 
+        type="button" 
+        onclick="triggerGoogleLogin()" 
+        style="margin: 0; padding: 8px 18px; font-size: 13px; border-radius: 20px; color: #fff; background: linear-gradient(135deg, #4285F4, #34A853); border: none; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 700; box-shadow: 0 4px 15px rgba(66, 133, 244, 0.3);"
+      >
+        <span>🌐</span> تسجيل الدخول بحساب Google
+      </button>
+    `;
+  }
+}
+window.updateAuthWidget = updateAuthWidget;
+try { updateAuthWidget(); } catch (_) {}
+
+window.triggerGoogleLogin = async function() {
+  try {
+    const user = await window.signInWithGoogle();
+    currentUser = user;
+    document.getElementById('login-prompt-modal').style.display = 'none';
+    
+    // Sync with Firestore
+    const data = await syncUserWithFirestore(user);
+    if (data) {
+      if (data.is_active === false) {
+        isSuspended = true;
+        document.getElementById('suspended-modal').style.display = 'flex';
+        return;
+      } else {
+        isSuspended = false;
+      }
+      if (!data.whatsapp) {
+        document.getElementById('whatsapp-modal').style.display = 'flex';
+        document.getElementById('whatsapp-error').style.display = 'none';
+      }
+    }
+    updateAuthWidget();
+  } catch (err) {
+    console.error(err);
+    alert(err.message || 'فشل تسجيل الدخول بحساب جوجل.');
+  }
+};
+
+window.triggerSignOut = async function() {
+  try {
+    await window.signOutUser();
+    currentUser = null;
+    isSuspended = false;
+    updateAuthWidget();
+  } catch (err) {
+    console.error(err);
+  }
+};
+
+window.handleSaveWhatsapp = async function(e) {
+  e.preventDefault();
+  const input = document.getElementById('whatsapp-input');
+  const errorDiv = document.getElementById('whatsapp-error');
+  const num = input.value.trim();
+  if (!num) {
+    errorDiv.textContent = 'يرجى إدخال رقم واتساب صالح';
+    errorDiv.style.display = 'block';
+    return;
+  }
+  errorDiv.style.display = 'none';
+  
+  const submitBtn = document.getElementById('whatsapp-submit-btn');
+  submitBtn.disabled = true;
+  submitBtn.textContent = 'جاري الحفظ...';
+  
+  try {
+    if (!window.firebaseDb) {
+      throw new Error("قاعدة بيانات فايربيز غير جاهزة بعد");
+    }
+    await window.firebaseDb.collection('users').doc(currentUser.uid).update({
+      whatsapp: num
+    });
+    document.getElementById('whatsapp-modal').style.display = 'none';
+    input.value = '';
+  } catch (err) {
+    errorDiv.textContent = err.message || 'فشل حفظ رقم الواتساب في فايربيز.';
+    errorDiv.style.display = 'block';
+  } finally {
+    submitBtn.disabled = false;
+    submitBtn.textContent = 'حفظ ومتابعة 🚀';
+  }
+};
+
+// Initialize Auth State Listener
+setTimeout(() => {
+  if (window.onAuthStateChanged) {
+    window.onAuthStateChanged(async (user) => {
+      if (user) {
+        currentUser = user;
+        // Verify or register in Firestore
+        try {
+          const data = await syncUserWithFirestore(user);
+          if (data) {
+            if (data.is_active === false) {
+              isSuspended = true;
+              document.getElementById('suspended-modal').style.display = 'flex';
+              return;
+            } else {
+              isSuspended = false;
+            }
+            if (!data.whatsapp) {
+              document.getElementById('whatsapp-modal').style.display = 'flex';
+              document.getElementById('whatsapp-error').style.display = 'none';
+            }
+          }
+        } catch (err) {
+          console.warn('Firestore user sync failed:', err);
+        }
+        
+        // مزامنة القوالب مع Firestore عند تسجيل الدخول
+        if (typeof syncTemplatesWithFirestore === 'function') {
+          syncTemplatesWithFirestore();
+        }
+      } else {
+        currentUser = null;
+        isSuspended = false;
+        // إعادة رسم القائمة المحلية
+        if (typeof renderTemplateList === 'function') {
+          renderTemplateList();
+        }
+      }
+      updateAuthWidget();
+    });
+  } else {
+    updateAuthWidget();
+  }
+}, 500);
+
+// ==================== Gemini Transcribe & Tab Logic ====================
+window.switchMainTab = function(tab) {
+  const editorBtn = document.getElementById('main-nav-editor');
+  const geminiBtn = document.getElementById('main-nav-gemini');
+  const convertBtn = document.getElementById('main-nav-convert');
+  const historyBtn = document.getElementById('main-nav-history');
+  const cohereBtn = document.getElementById('main-nav-cohere');
+  const tiktokBtn = document.getElementById('main-nav-tiktok-schedule');
+
+  const coherePanel = document.getElementById('cohere-dashboard-panel');
+  const dashboard = document.getElementById('main-dashboard');
+  const geminiPanel = document.getElementById('gemini-transcribe-panel');
+  const convertPanel = document.getElementById('convert-video-panel');
+  const historyPanel = document.getElementById('history-archive-panel');
+  const tiktokPanel = document.getElementById('tiktok-schedule-panel');
+  const editorState = document.getElementById('editor-state');
+
+  const tabs = [
+    { name: 'editor', btn: editorBtn, el: dashboard },
+    { name: 'gemini', btn: geminiBtn, el: geminiPanel },
+    { name: 'convert', btn: convertBtn, el: convertPanel },
+    { name: 'history', btn: historyBtn, el: historyPanel },
+    { name: 'cohere', btn: cohereBtn, el: coherePanel },
+    { name: 'tiktok-schedule', btn: tiktokBtn, el: tiktokPanel }
+  ];
+
+  tabs.forEach(t => {
+    if (t.name === tab) {
+      if (t.btn) {
+        t.btn.classList.add('active');
+        t.btn.style.background = 'rgba(139, 92, 246, 0.15)';
+        t.btn.style.borderColor = 'var(--purple-accent)';
+        t.btn.style.color = '#fff';
+      }
+      if (t.el) t.el.classList.remove('hidden');
+    } else {
+      if (t.btn) {
+        t.btn.classList.remove('active');
+        t.btn.style.background = 'transparent';
+        t.btn.style.borderColor = 'transparent';
+        t.btn.style.color = 'rgba(255,255,255,0.6)';
+      }
+      if (t.el) t.el.classList.add('hidden');
+    }
+  });
+
+  if (tab !== 'editor' && editorState) {
+    editorState.classList.add('hidden');
+  } else if (tab === 'editor' && editorState && (typeof transcriptionData !== 'undefined' && transcriptionData)) {
+    editorState.classList.remove('hidden');
+  }
+
+  if (tab === 'gemini') {
+    const savedKey = localStorage.getItem('gemini_api_key');
+    const keyInput = document.getElementById('gemini-key-input');
+    if (savedKey && keyInput) {
+      keyInput.value = savedKey;
+    }
+  }
+
+  if (tab === 'history') {
+    renderHistoryModal();
+  }
+
+  if (tab === 'tiktok-schedule') {
+    initBufferTab();
+  }
+};
+
+// ==================== Buffer & TikTok Schedule Integration ====================
+
+window.logBufferAction = function(type, message, details = null) {
+  const logBox = document.getElementById('buffer-live-logs');
+  const now = new Date();
+  const timeStr = now.toTimeString().split(' ')[0];
+  
+  let color = '#38bdf8';
+  let badge = '[INFO]';
+  if (type === 'success') {
+    color = '#10b981';
+    badge = '[SUCCESS]';
+  } else if (type === 'error') {
+    color = '#ef4444';
+    badge = '[ERROR]';
+  } else if (type === 'buffer') {
+    color = '#c084fc';
+    badge = '[BUFFER API]';
+  } else if (type === 'cloudinary') {
+    color = '#38bdf8';
+    badge = '[CLOUDINARY]';
+  }
+  
+  let detailsText = '';
+  if (details) {
+    try {
+      detailsText = typeof details === 'string' ? ` - ${details}` : `\n  ↳ ${JSON.stringify(details, null, 2)}`;
+    } catch (e) {
+      detailsText = ` - ${details}`;
+    }
+  }
+
+  const logLine = `<div style="margin-bottom: 4px; font-family: 'Courier New', Courier, monospace;"><span style="color: #64748b;">[${timeStr}]</span> <span style="color: ${color}; font-weight: bold;">${badge}</span> <span style="color: #f1f5f9;">${message}</span><span style="color: #94a3b8; font-size: 11px;">${detailsText}</span></div>`;
+  
+  if (logBox) {
+    logBox.innerHTML += logLine;
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+  console.log(`[${timeStr}] ${badge} ${message}`, details || '');
+};
+
+window.copyBufferLogs = function() {
+  const logBox = document.getElementById('buffer-live-logs');
+  if (logBox) {
+    navigator.clipboard.writeText(logBox.innerText || logBox.textContent);
+    alert('✅ تم نسخ سجل العمليات (Logs) بالكامل!');
+  }
+};
+
+window.clearBufferLogs = function() {
+  const logBox = document.getElementById('buffer-live-logs');
+  if (logBox) {
+    logBox.innerHTML = '<div style="color: #94a3b8;">[CLEARED] Operation logs console cleared. Awaiting actions...</div>';
+  }
+};
+
+window.saveBufferCredentials = function() {
+  const tokenInput = document.getElementById('buffer-api-key-input');
+  const cloudNameInput = document.getElementById('cloudinary-cloud-name');
+  const presetInput = document.getElementById('cloudinary-upload-preset');
+  
+  if (tokenInput) localStorage.setItem('buffer_api_key', tokenInput.value.trim());
+  if (cloudNameInput) localStorage.setItem('cloudinary_cloud_name', cloudNameInput.value.trim());
+  if (presetInput) localStorage.setItem('cloudinary_upload_preset', presetInput.value.trim());
+};
+
+window.togglePasswordVisibility = function(inputId) {
+  const inp = document.getElementById(inputId);
+  if (inp) {
+    inp.type = inp.type === 'password' ? 'text' : 'password';
+  }
+};
+
+function showBufferStatus(text, type) {
+  const el = document.getElementById('buffer-status-msg');
+  if (!el) return;
+  el.style.display = 'block';
+  el.textContent = text;
+  if (type === 'error') {
+    el.style.background = 'rgba(239, 68, 68, 0.15)';
+    el.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+    el.style.color = '#fca5a5';
+  } else if (type === 'success') {
+    el.style.background = 'rgba(16, 185, 129, 0.15)';
+    el.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+    el.style.color = '#6ee7b7';
+  } else {
+    el.style.background = 'rgba(139, 92, 246, 0.15)';
+    el.style.border = '1px solid rgba(139, 92, 246, 0.4)';
+    el.style.color = '#c084fc';
+  }
+}
+
+function renderBufferChannelsList(channels) {
+  const container = document.getElementById('buffer-channels-container');
+  const emptyState = document.getElementById('buffer-channels-empty');
+  const countBadge = document.getElementById('buffer-channels-count');
+  
+  if (!channels || channels.length === 0) {
+    if (container) container.innerHTML = '';
+    if (emptyState) emptyState.style.display = 'block';
+    if (countBadge) countBadge.textContent = '0 قنوات';
+    populateBufferChannelSelect([]);
+    return;
+  }
+  
+  if (emptyState) emptyState.style.display = 'none';
+  if (countBadge) countBadge.textContent = `${channels.length} قناة مربوطة`;
+  
+  populateBufferChannelSelect(channels);
+  
+  let html = '';
+  channels.forEach(ch => {
+    const isTikTok = (ch.service || '').toLowerCase() === 'tiktok';
+    const isInstagram = (ch.service || '').toLowerCase() === 'instagram';
+    const isYouTube = (ch.service || '').toLowerCase() === 'youtube';
+    const isTwitter = (ch.service || '').toLowerCase() === 'twitter' || (ch.service || '').toLowerCase() === 'x';
+    
+    let serviceIcon = '🌐';
+    let serviceBadgeBg = 'rgba(255,255,255,0.1)';
+    let serviceBadgeColor = '#fff';
+    
+    if (isTikTok) {
+      serviceIcon = '🎵';
+      serviceBadgeBg = 'linear-gradient(135deg, #00f2fe 0%, #4facfe 100%)';
+      serviceBadgeColor = '#000';
+    } else if (isInstagram) {
+      serviceIcon = '📸';
+      serviceBadgeBg = 'linear-gradient(135deg, #f58529, #dd2a7b, #8134af)';
+      serviceBadgeColor = '#fff';
+    } else if (isYouTube) {
+      serviceIcon = '▶️';
+      serviceBadgeBg = '#ff0000';
+      serviceBadgeColor = '#fff';
+    } else if (isTwitter) {
+      serviceIcon = '🐦';
+      serviceBadgeBg = '#1da1f2';
+      serviceBadgeColor = '#fff';
+    }
+    
+    const serviceName = ch.service ? ch.service.toUpperCase() : 'CHANNEL';
+    const isPaused = !!ch.isQueuePaused;
+    const avatarUrl = ch.avatar || `https://ui-avatars.com/api/?name=${encodeURIComponent(ch.displayName || ch.name || 'User')}&background=8b5cf6&color=fff`;
+    
+    html += `
+      <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(15,23,42,0.6); border: 1px solid ${isTikTok ? 'rgba(168,85,247,0.4)' : 'rgba(255,255,255,0.08)'}; border-radius: 12px; padding: 14px; gap: 12px; transition: all 0.3s;">
+        <div style="display: flex; align-items: center; gap: 12px; min-width: 0;">
+          <img src="${avatarUrl}" alt="${ch.name || ''}" style="width: 44px; height: 44px; border-radius: 50%; object-fit: cover; border: 2px solid ${isTikTok ? '#a855f7' : 'rgba(255,255,255,0.2)'};" onerror="this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(ch.displayName || ch.name || 'User')}&background=8b5cf6&color=fff'" />
+          <div style="min-width: 0;">
+            <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+              <span style="color: #fff; font-weight: 700; font-size: 14px;">${ch.displayName || ch.name || 'قناة غير معنونة'}</span>
+              <span style="font-size: 10px; font-weight: 800; padding: 2px 8px; border-radius: 20px; background: ${serviceBadgeBg}; color: ${serviceBadgeColor};">
+                ${serviceIcon} ${serviceName}
+              </span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 11px; color: var(--text-muted);">
+              <span>@${ch.name || 'user'}</span>
+              <span>•</span>
+              <span style="font-family: monospace; color: #a855f7;">ID: ${ch.id}</span>
+            </div>
+          </div>
+        </div>
+        <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 6px;">
+          <span style="font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: ${isPaused ? 'rgba(239,68,68,0.15)' : 'rgba(16,185,129,0.15)'}; color: ${isPaused ? '#ef4444' : '#10b981'}; border: 1px solid ${isPaused ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)'};">
+            ${isPaused ? '⏸️ متوقف مؤقتاً' : '🟢 متصل ونشط'}
+          </span>
+          <button type="button" onclick="selectChannelForPublish('${ch.id}')" class="btn-secondary" style="font-size: 10px; padding: 3px 8px; background: rgba(139, 92, 246, 0.2); border-color: var(--purple-accent); color: #fff;">
+            📌 اختيار للنشر
+          </button>
+        </div>
+      </div>
+    `;
+  });
+  
+  if (container) container.innerHTML = html;
+}
+
+function populateBufferChannelSelect(channels) {
+  const select = document.getElementById('buffer-post-channel-select');
+  if (!select) return;
+  
+  if (!channels || channels.length === 0) {
+    select.innerHTML = '<option value="">-- اضغط فحص وجلب القنوات أولاً --</option>';
+    return;
+  }
+  
+  let optionsHtml = '<option value="">-- اختر القناة المستهدفة --</option>';
+  channels.forEach(ch => {
+    const isTikTok = (ch.service || '').toLowerCase() === 'tiktok';
+    const tag = isTikTok ? '🎵 TikTok' : (ch.service ? `🌐 ${ch.service.toUpperCase()}` : 'Channel');
+    optionsHtml += `<option value="${ch.id}" ${isTikTok ? 'selected' : ''}>[${tag}] ${ch.displayName || ch.name} (@${ch.name || 'user'})</option>`;
+  });
+  select.innerHTML = optionsHtml;
+}
+
+window.selectChannelForPublish = function(channelId) {
+  const select = document.getElementById('buffer-post-channel-select');
+  if (select) {
+    select.value = channelId;
+    select.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    select.style.borderColor = '#a855f7';
+    setTimeout(() => { select.style.borderColor = 'var(--border-subtle)'; }, 1500);
+    logBufferAction('info', `تم اختيار القناة للنشر: ID ${channelId}`);
+  }
+};
+
+window.fetchBufferChannels = async function() {
+  const tokenInput = document.getElementById('buffer-api-key-input');
+  const token = tokenInput ? tokenInput.value.trim() : '';
+  const btn = document.getElementById('btn-fetch-buffer-channels');
+  
+  if (!token) {
+    showBufferStatus('يرجى إدخال مفتاح Buffer API Key أولاً.', 'error');
+    logBufferAction('error', 'محاولة جلب القنوات بدون إدخال Buffer API Key.');
+    return;
+  }
+  
+  localStorage.setItem('buffer_api_key', token);
+  logBufferAction('buffer', 'بدء الاتصال بـ Buffer GraphQL API لجلب المنظمات والقنوات...');
+  
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳</span> جاري الاتصال بـ Buffer وجلب القنوات...';
+  }
+  showBufferStatus('جاري التحقق من الحساب وجلب القنوات من Buffer...', 'info');
+  
+  try {
+    let channels = [];
+    let fetchSuccessful = false;
+    
+    // Method 1: Try direct GraphQL to Buffer API
+    try {
+      logBufferAction('buffer', 'إرسال طلب GetOrganizations مباشر إلى https://api.buffer.com');
+      const orgRes = await fetch('https://api.buffer.com', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          query: `
+            query GetOrganizations {
+              account {
+                id
+                email
+                organizations {
+                  id
+                  name
+                }
+              }
+            }
+          `
+        })
+      });
+      
+      if (orgRes.ok) {
+        const orgData = await orgRes.json();
+        if (orgData.errors && orgData.errors.length > 0) {
+          throw new Error(orgData.errors[0].message || 'خطأ في استجابة Buffer');
+        }
+        
+        const orgs = orgData?.data?.account?.organizations || [];
+        logBufferAction('success', `تم جلب ${orgs.length} منظمة من الحساب:`, orgs);
+        
+        if (orgs.length > 0) {
+          for (const org of orgs) {
+            logBufferAction('buffer', `جلب القنوات للمنظمة ID: ${org.id}...`);
+            const chanRes = await fetch('https://api.buffer.com', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                query: `
+                  query GetChannels {
+                    channels(input: {
+                      organizationId: "${org.id}"
+                    }) {
+                      id
+                      name
+                      displayName
+                      service
+                      avatar
+                      isQueuePaused
+                    }
+                  }
+                `
+              })
+            });
+            if (chanRes.ok) {
+              const chanData = await chanRes.json();
+              const orgChannels = chanData?.data?.channels || [];
+              channels = channels.concat(orgChannels);
+            }
+          }
+          fetchSuccessful = true;
+        }
+      }
+    } catch (directErr) {
+      logBufferAction('error', `الاتصال المباشر واجه قيد، جاري التحويل للبروكسي...`, directErr.message);
+    }
+    
+    // Method 2: Fallback to backend proxy if direct fetch did not succeed
+    if (!fetchSuccessful) {
+      const backendBase = (typeof apiUrl !== 'undefined' && apiUrl ? apiUrl : '').replace(/\/$/, '');
+      logBufferAction('info', `إرسال طلب عبر السيرفر الوسيط: ${backendBase}/api/buffer/channels`);
+      const proxyRes = await fetch(backendBase + '/api/buffer/channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: token })
+      });
+      const proxyData = await proxyRes.json();
+      if (!proxyRes.ok || proxyData.error || proxyData.detail) {
+        throw new Error(proxyData.detail || proxyData.error || 'فشل الاتصال بـ Buffer');
+      }
+      channels = proxyData.channels || [];
+      fetchSuccessful = true;
+    }
+    
+    localStorage.setItem('buffer_cached_channels', JSON.stringify(channels));
+    window.bufferChannels = channels;
+    renderBufferChannelsList(channels);
+    
+    if (channels.length > 0) {
+      showBufferStatus(`✅ تم الاتصال بنجاح وجلب ${channels.length} قناة مربوطة!`, 'success');
+      logBufferAction('success', `تم جلب ${channels.length} قناة بنجاح:`, channels.map(c => ({ id: c.id, name: c.displayName || c.name, service: c.service })));
+    } else {
+      showBufferStatus('تم الاتصال بالحساب بنجاح، لكن لا توجد أي قنوات مربوطة حالياً في حساب Buffer.', 'info');
+      logBufferAction('info', 'تم الاتصال ولكن لا توجد قنوات مربوطة في حساب Buffer.');
+    }
+  } catch (err) {
+    console.error('Buffer fetch error:', err);
+    showBufferStatus(`❌ خطأ: ${err.message || 'تعذر الاتصال بـ Buffer'}`, 'error');
+    logBufferAction('error', `فشل جلب قنوات Buffer: ${err.message}`, err);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>🔄</span> فحص وجلب القنوات المربوطة';
+    }
+  }
+};
+
+// ==================== Smart Caption & Contextual Hashtags ====================
+let currentSelectedVideoTitle = '';
+let uploadedVideoCloudinaryUrl = null;
+
+window.cleanClipTitle = function(rawTitle) {
+  if (!rawTitle) return '';
+  // 1. Strip leading invisible control chars, bidirectional marks (\u200E, \u200F, \u202A-\u202E, \uFEFF), emojis and spaces
+  let clean = rawTitle.replace(/^[\u2000-\u206F\uFEFF\s\p{Emoji}\u200d]+/gu, '').trim();
+  
+  // 2. Specific pattern for "مقطع Shorts #12:", "مقطع شورتس #3:", "Shorts #4:", "مقطع رقم 5:", "فيديو كابشن نهائي:"
+  clean = clean.replace(/^(?:مقطع|فيديو|شورتس|Shorts|Clip|Video)?\s*(?:Shorts|شورتس|قصير|نهائي|معدل)?\s*(?:#|رقم|No\.?)\s*\d+\s*[:\-–—|]?\s*/gi, '');
+  clean = clean.replace(/^(?:مقطع\s*(?:Shorts|شورتس|قصير)?\s*\d+\s*[:\-–—|]\s*)/gi, '');
+  clean = clean.replace(/^(?:Shorts|شورتس|Clip|Video)\s*\d+\s*[:\-–—|]\s*/gi, '');
+  clean = clean.replace(/^(?:فيديو\s*كابشن\s*نهائي|كابشن\s*نهائي)\s*[:\-–—|]?\s*/gi, '');
+  clean = clean.replace(/^(?:مقطع|فيديو|Shorts|شورتس|كابشن نهائي)\s*[:\-–—|]\s*/gi, '').trim();
+
+  // 3. Strip timestamps like (00:15 - 00:45) or (1:30)
+  clean = clean.replace(/\(\d{1,2}:\d{2}\s*(?:-\s*\d{1,2}:\d{2})?\)/g, '');
+  // 4. Strip trailing extensions
+  clean = clean.replace(/\.(mp4|mov|avi|mkv|webm)$/i, '');
+  // 5. Strip enclosing quotes or brackets
+  clean = clean.replace(/^[\[\("'\s«»]+|[\]\)"'\s«»]+$/g, '').trim();
+  
+  return clean || rawTitle.replace(/\.(mp4|mov|avi|mkv|webm)$/i, '').trim();
+};
+
+window.generateSmartCaptionAndHashtags = function(rawTitle, rawText = '') {
+  if (!rawTitle && !rawText) return { title: '', caption: '', hashtags: ['#fyp', '#viral', '#shorts', '#tiktok'] };
+  
+  // 1. Clean rawTitle using robust regex cleaner
+  let cleanTitle = cleanClipTitle(rawTitle);
+  
+  if (!cleanTitle && rawText) {
+    cleanTitle = cleanClipTitle(rawText.split('\n')[0].slice(0, 60));
+  }
+  
+  // 2. Extract keywords from cleanTitle & rawText
+  const fullText = (cleanTitle + ' ' + (rawText || '')).toLowerCase();
+  
+  // Common Arabic stop words to exclude from hashtags
+  const stopWords = new Set([
+    'في', 'من', 'على', 'إلى', 'الى', 'عن', 'مع', 'هذا', 'هذه', 'هؤلاء', 'هو', 'هي', 'هم', 'هن',
+    'كان', 'كانت', 'يكون', 'ان', 'أن', 'إن', 'التي', 'الذي', 'الذين', 'ما', 'لا', 'لم', 'لن',
+    'لو', 'قد', 'كل', 'غير', 'بين', 'حيث', 'كيف', 'ماذا', 'لماذا', 'هل', 'يا', 'اي', 'أي',
+    'او', 'أو', 'ثم', 'لكن', 'بل', 'أنا', 'نحن', 'انت', 'أنتم', 'بعد', 'قبل', 'حتى', 'فوق', 'تحت'
+  ]);
+  
+  // Extract words of length >= 3
+  const words = cleanTitle.replace(/[^\u0621-\u064A\w\s]/g, ' ').split(/\s+/).filter(w => w.length >= 3 && !stopWords.has(w));
+  
+  const contextualTags = [];
+  
+  // Topic detection rules
+  if (/(قيامة|جنة|نار|صلاة|دين|اسلام|إسلام|الله|نبي|رسول|قرآن|قران|حديث|موعظة|توبة|حسناء|دعاء|رمضان|عذاب|موت)/.test(fullText)) {
+    contextualTags.push('#يوم_القيامة', '#مواعظ', '#اسلاميات', '#توعية');
+  } else if (/(ذكاء|تقنية|برمجة|ai|كمبيوتر|تطبيق|موقع|هاتف|ايفون|أندرويد|شرح|حاسوب)/.test(fullText)) {
+    contextualTags.push('#تقنية', '#ذكاء_اصطناعي', '#شروحات', '#تطبيقات');
+  } else if (/(قصة|حكاية|سر|عجيب|اغرب|أغرب|حقيقة|تاريخ|وثائقي|غموض|رعب|جريمة)/.test(fullText)) {
+    contextualTags.push('#قصص', '#حقائق', '#غرائب', '#معلومات');
+  } else if (/(نجاح|تطوير|تحفيز|مال|بزنس|ريادة|هدف|طاقة|علم_نفس|ثراء|فلوس)/.test(fullText)) {
+    contextualTags.push('#تطوير_الذات', '#تحفيز', '#بزنس', '#نجاح');
+  } else if (/(صحة|دايت|رياضة|تمرين|جسم|علاج|طب|عضلات|تغذية)/.test(fullText)) {
+    contextualTags.push('#صحة', '#لياقة', '#تمارين', '#تغذية');
+  } else if (/(بودكاست|حوار|لقاء|مقابلة|نقاش|ضيف)/.test(fullText)) {
+    contextualTags.push('#بودكاست', '#حوار', '#نصائح', '#فكرة');
+  }
+  
+  // Add extracted direct word tags from the title
+  words.slice(0, 3).forEach(w => {
+    const tag = '#' + w.replace(/[^\u0621-\u064A\w]/g, '');
+    if (tag.length > 2 && !contextualTags.includes(tag)) {
+      contextualTags.push(tag);
+    }
+  });
+  
+  // Add universal viral tags
+  const viralTags = ['#fyp', '#viral', '#shorts', '#tiktok'];
+  
+  // Combine all unique tags (max 6 tags total)
+  const allTags = Array.from(new Set([...contextualTags, ...viralTags])).slice(0, 6);
+  
+  // Format attribution for TikTok publishing (Line 1: Title, Line 2: Copyright/Episode Attribution)
+  const sourceTitle = (typeof currentYoutubeVideoTitle !== 'undefined' && currentYoutubeVideoTitle)
+    ? currentYoutubeVideoTitle.trim()
+    : ((typeof window !== 'undefined' && window.currentYoutubeVideoTitle)
+        ? window.currentYoutubeVideoTitle.trim()
+        : (typeof localStorage !== 'undefined' ? (localStorage.getItem('last_youtube_video_title') || '').trim() : ''));
+  const attributionLine = sourceTitle ? `جزء من حلقة: ${sourceTitle}` : '';
+
+  let formattedCaption = cleanTitle || '';
+  if (attributionLine) {
+    formattedCaption = formattedCaption ? `${formattedCaption}\n${attributionLine}` : attributionLine;
+  }
+  if (formattedCaption) {
+    formattedCaption += `\n\n${allTags.join(' ')}`;
+  } else {
+    formattedCaption = allTags.join(' ');
+  }
+
+  return {
+    title: cleanTitle,
+    caption: formattedCaption,
+    hashtags: allTags,
+    attribution: attributionLine
+  };
+};
+
+window.applySmartCaptionToBufferUI = function(rawTitle, rawText = '') {
+  currentSelectedVideoTitle = rawTitle || '';
+  const { title, caption, hashtags } = generateSmartCaptionAndHashtags(rawTitle, rawText);
+  
+  const captionInput = document.getElementById('buffer-post-caption');
+  if (captionInput) {
+    captionInput.value = caption;
+    const countEl = document.getElementById('buf-caption-count');
+    if (countEl) countEl.textContent = caption.length + ' حرف';
+  }
+  
+  renderDynamicHashtagPills(hashtags);
+  logBufferAction('info', `تم توليد العنوان النقي والهاشتاجات الذكية تلقائياً: ${title || 'مقطع'}`);
+};
+
+function renderDynamicHashtagPills(tags) {
+  const container = document.getElementById('buf-dynamic-hashtags-container');
+  if (!container) return;
+  
+  let html = '<span style="font-size: 11px; color: #94a3b8; align-self: center;">هاشتاجات مقترحة:</span>';
+  tags.forEach(t => {
+    html += `<button type="button" onclick="appendBufferHashtag('${t}')" class="btn-secondary" style="font-size: 10px; padding: 2px 7px; background: rgba(168,85,247,0.15); border-color: rgba(168,85,247,0.3); color: #e9d5ff;">${t}</button>`;
+  });
+  container.innerHTML = html;
+}
+
+window.regenerateSmartCaptionForCurrentVideo = function() {
+  applySmartCaptionToBufferUI(currentSelectedVideoTitle || 'مقطع فيديو');
+};
+
+window.refreshBufferHistoryList = function() {
+  populateBufferHistorySelect();
+  logBufferAction('info', '🔄 تم تحديث قائمة فيديوهات الأرشيف.');
+};
+
+// ==================== Buffer Video Source & Upload Workflow ====================
+let bufferSelectedVideoFile = null;
+let bufferSelectedVideoBlob = null;
+let currentBufferVideoSource = 'local';
+
+window.switchBufferVideoSource = function(source) {
+  currentBufferVideoSource = source;
+  uploadedVideoCloudinaryUrl = null;
+  const urlInput = document.getElementById('buffer-post-video-url');
+  if (urlInput) urlInput.value = '';
+  
+  logBufferAction('info', `تم تغيير مصدر الفيديو إلى: ${source}`);
+  
+  const localBtn = document.getElementById('buf-src-btn-local');
+  const historyBtn = document.getElementById('buf-src-btn-history');
+  const currentBtn = document.getElementById('buf-src-btn-current');
+  
+  const localBox = document.getElementById('buf-source-local-box');
+  const historyBox = document.getElementById('buf-source-history-box');
+  const currentBox = document.getElementById('buf-source-current-box');
+  
+  const buttons = [
+    { name: 'local', btn: localBtn, box: localBox },
+    { name: 'history', btn: historyBtn, box: historyBox },
+    { name: 'current', btn: currentBtn, box: currentBox }
+  ];
+  
+  buttons.forEach(b => {
+    if (b.name === source) {
+      if (b.btn) {
+        b.btn.style.background = 'rgba(139, 92, 246, 0.2)';
+        b.btn.style.borderColor = 'var(--purple-accent)';
+        b.btn.style.color = '#fff';
+      }
+      if (b.box) b.box.classList.remove('hidden');
+    } else {
+      if (b.btn) {
+        b.btn.style.background = 'transparent';
+        b.btn.style.borderColor = 'transparent';
+        b.btn.style.color = 'rgba(255,255,255,0.6)';
+      }
+      if (b.box) b.box.classList.add('hidden');
+    }
+  });
+  
+  if (source === 'history') {
+    populateBufferHistorySelect();
+  } else if (source === 'current') {
+    checkCurrentRenderedVideo();
+  }
+};
+
+function populateBufferHistorySelect() {
+  const select = document.getElementById('buf-history-select');
+  if (!select) return;
+  
+  let entries = [];
+  if (typeof getHistoryEntries === 'function') {
+    entries = getHistoryEntries();
+  }
+  
+  if (!entries || entries.length === 0) {
+    select.innerHTML = '<option value="">-- لا توجد فيديوهات في الأرشيف حالياً --</option>';
+    return;
+  }
+  
+  let html = '<option value="">-- اختر فيديو من الأرشيف --</option>';
+  entries.forEach((item, idx) => {
+    const d = new Date(item.timestamp);
+    const dateStr = d.toLocaleDateString('ar-EG', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const cleanT = cleanClipTitle(item.title) || ('فيديو ' + (idx + 1));
+    html += `<option value="${item.id}">🎬 ${cleanT} (${dateStr})</option>`;
+  });
+  select.innerHTML = html;
+}
+
+window.handleBufferVideoFileSelect = function(file) {
+  if (!file) return;
+  bufferSelectedVideoFile = file;
+  bufferSelectedVideoBlob = file;
+  uploadedVideoCloudinaryUrl = null;
+  
+  const urlInput = document.getElementById('buffer-post-video-url');
+  if (urlInput) urlInput.value = '';
+  
+  const nameEl = document.getElementById('buf-selected-file-name');
+  if (nameEl) nameEl.textContent = `✅ ${file.name} (${(file.size / (1024 * 1024)).toFixed(1)} MB)`;
+  
+  logBufferAction('info', `تم اختيار ملف فيديو محلي: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`);
+  
+  const player = document.getElementById('buf-video-preview-player');
+  const wrapper = document.getElementById('buf-video-preview-wrapper');
+  if (player && wrapper) {
+    player.src = URL.createObjectURL(file);
+    wrapper.classList.remove('hidden');
+  }
+  
+  // Auto smart caption from file name
+  applySmartCaptionToBufferUI(file.name.replace(/\.[^/.]+$/, ''));
+};
+
+window.handleBufferHistorySelect = async function(historyId) {
+  if (!historyId) return;
+  const entries = typeof getHistoryEntries === 'function' ? getHistoryEntries() : [];
+  const entry = entries.find(e => e.id === historyId);
+  if (!entry) return;
+  
+  uploadedVideoCloudinaryUrl = null;
+  const urlInput = document.getElementById('buffer-post-video-url');
+  if (urlInput) urlInput.value = '';
+  
+  logBufferAction('info', `تحميل فيديو من الأرشيف: ${entry.title || historyId}`);
+  const player = document.getElementById('buf-video-preview-player');
+  const wrapper = document.getElementById('buf-video-preview-wrapper');
+  
+  try {
+    let blob = null;
+    if (typeof getVideoBlobFromIDB === 'function') {
+      blob = await getVideoBlobFromIDB(entry.id);
+    }
+    
+    if (blob) {
+      bufferSelectedVideoBlob = blob;
+      bufferSelectedVideoFile = new File([blob], `${entry.title || 'video'}.mp4`, { type: 'video/mp4' });
+      if (player && wrapper) {
+        player.src = URL.createObjectURL(blob);
+        wrapper.classList.remove('hidden');
+      }
+      logBufferAction('success', `تم استخراج ملف الفيديو من IndexedDB بنجاح (${(blob.size / (1024 * 1024)).toFixed(2)} MB)`);
+    } else if (entry.serverUrl) {
+      if (player && wrapper) {
+        player.src = entry.serverUrl;
+        wrapper.classList.remove('hidden');
+      }
+      const res = await fetch(entry.serverUrl);
+      bufferSelectedVideoBlob = await res.blob();
+      bufferSelectedVideoFile = new File([bufferSelectedVideoBlob], `${entry.title || 'video'}.mp4`, { type: 'video/mp4' });
+      logBufferAction('success', `تم تنزيل الفيديو من رابط السيرفر (${(bufferSelectedVideoBlob.size / (1024 * 1024)).toFixed(2)} MB)`);
+    }
+    
+    // Auto smart caption from history title
+    applySmartCaptionToBufferUI(entry.title || 'مقطع فيديو');
+  } catch (err) {
+    logBufferAction('error', 'فشل تحميل الفيديو من الأرشيف:', err.message);
+  }
+};
+
+function checkCurrentRenderedVideo() {
+  const statusEl = document.getElementById('buf-current-video-status');
+  const player = document.getElementById('buf-video-preview-player');
+  const wrapper = document.getElementById('buf-video-preview-wrapper');
+  
+  uploadedVideoCloudinaryUrl = null;
+  const urlInput = document.getElementById('buffer-post-video-url');
+  if (urlInput) urlInput.value = '';
+  
+  let targetUrl = null;
+  if (typeof lastConvertedBlob !== 'undefined' && lastConvertedBlob) {
+    bufferSelectedVideoBlob = lastConvertedBlob;
+    bufferSelectedVideoFile = new File([lastConvertedBlob], 'current_video.mp4', { type: 'video/mp4' });
+    targetUrl = URL.createObjectURL(lastConvertedBlob);
+    logBufferAction('info', 'تم العثور على آخر فيديو تم تحويله في الذاكرة.');
+  } else if (typeof renderTaskStatus !== 'undefined' && renderTaskStatus && renderTaskStatus.videoUrl) {
+    const backendBase = (typeof apiUrl !== 'undefined' && apiUrl ? apiUrl : '').replace(/\/$/, '');
+    targetUrl = `${backendBase}/${renderTaskStatus.videoUrl.replace(/^\//, '')}`;
+    logBufferAction('info', `تم العثور على آخر فيديو مرندر: ${targetUrl}`);
+  }
+  
+  if (targetUrl) {
+    if (statusEl) statusEl.innerHTML = '✅ تم العثور على آخر فيديو مجهز بنجاح!';
+    if (player && wrapper) {
+      player.src = targetUrl;
+      wrapper.classList.remove('hidden');
+    }
+    applySmartCaptionToBufferUI('فيديو ReKaption النهائي');
+  } else {
+    if (statusEl) statusEl.innerHTML = '⚠️ لم تقم برندرة فيديو بعد في المحرر الحالي. يمكنك رفع فيديو محلي أو اختيار فيديو من الأرشيف.';
+  }
+}
+
+window.uploadToCloudinaryDirect = async function(fileToUpload) {
+  const cloudName = (localStorage.getItem('cloudinary_cloud_name') || '').trim();
+  const uploadPreset = (localStorage.getItem('cloudinary_upload_preset') || '').trim();
+  const btn = document.getElementById('btn-upload-cloudinary');
+  const progressContainer = document.getElementById('buf-upload-progress-container');
+  const progressBar = document.getElementById('buf-upload-progress-bar');
+  const percentText = document.getElementById('buf-upload-percent-text');
+  const urlInput = document.getElementById('buffer-post-video-url');
+  
+  if (!cloudName || !uploadPreset) {
+    throw new Error('يرجى كتابة Cloud Name و Upload Preset في إعدادات Cloudinary بالأعلى أولاً.');
+  }
+  
+  if (!fileToUpload) {
+    throw new Error('لم يتم تحديد ملف فيديو للرفع.');
+  }
+  
+  if (btn) btn.disabled = true;
+  if (progressContainer) progressContainer.classList.remove('hidden');
+  if (progressBar) progressBar.style.width = '0%';
+  if (percentText) percentText.textContent = '0%';
+  
+  logBufferAction('cloudinary', `بدء الرفع التلقائي إلى Cloudinary (${cloudName}) باستخدام Preset (${uploadPreset})...`);
+  
+  const secureUrl = await new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('file', fileToUpload);
+    formData.append('upload_preset', uploadPreset);
+    
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`);
+    
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        const percent = Math.round((e.loaded / e.total) * 100);
+        if (progressBar) progressBar.style.width = percent + '%';
+        if (percentText) percentText.textContent = percent + '%';
+      }
+    };
+    
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data.secure_url) resolve(data.secure_url);
+          else reject(new Error('لم يتم إرجاع secure_url من Cloudinary'));
+        } catch (err) {
+          reject(new Error('خطأ في قراءة استجابة Cloudinary: ' + err.message));
+        }
+      } else {
+        try {
+          const errData = JSON.parse(xhr.responseText);
+          reject(new Error(errData.error?.message || `خطأ Cloudinary (${xhr.status})`));
+        } catch (e) {
+          reject(new Error(`فشل الرفع إلى Cloudinary (كود ${xhr.status})`));
+        }
+      }
+    };
+    
+    xhr.onerror = () => reject(new Error('فشل الاتصال بـ Cloudinary (خطأ في الشبكة)'));
+    xhr.send(formData);
+  });
+  
+  uploadedVideoCloudinaryUrl = secureUrl;
+  if (urlInput) urlInput.value = secureUrl;
+  if (percentText) percentText.textContent = '100% مكتمل!';
+  if (btn) btn.innerHTML = '<span>✅</span> تم الرفع بنجاح!';
+  logBufferAction('success', `🎉 تم رفع الفيديو بنجاح إلى Cloudinary:\n${secureUrl}`);
+  
+  setTimeout(() => {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>☁️</span> إعادة رفع الفيديو';
+    }
+  }, 2500);
+  
+  return secureUrl;
+};
+
+window.triggerCloudinaryUpload = async function() {
+  let fileToUpload = bufferSelectedVideoFile || bufferSelectedVideoBlob;
+  
+  if (!fileToUpload && currentBufferVideoSource === 'current' && typeof renderTaskStatus !== 'undefined' && renderTaskStatus && renderTaskStatus.videoUrl) {
+    try {
+      const backendBase = (typeof apiUrl !== 'undefined' && apiUrl ? apiUrl : '').replace(/\/$/, '');
+      const fullUrl = `${backendBase}/${renderTaskStatus.videoUrl.replace(/^\//, '')}`;
+      logBufferAction('cloudinary', `جاري تنزيل ملف الفيديو من السيرفر قبل الرفع: ${fullUrl}`);
+      const res = await fetch(fullUrl);
+      fileToUpload = await res.blob();
+    } catch (e) {
+      logBufferAction('error', 'فشل جلب ملف الفيديو من السيرفر:', e.message);
+    }
+  }
+  
+  try {
+    await uploadToCloudinaryDirect(fileToUpload);
+  } catch (err) {
+    console.error('Cloudinary upload error:', err);
+    logBufferAction('error', `فشل الرفع إلى Cloudinary: ${err.message}`);
+    alert('❌ خطأ أثناء الرفع إلى Cloudinary:\n' + err.message);
+    const btn = document.getElementById('btn-upload-cloudinary');
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>☁️</span> رفع الفيديو وتوليد الرابط المباشر';
+    }
+  }
+};
+
+window.appendBufferHashtag = function(tag) {
+  const captionInput = document.getElementById('buffer-post-caption');
+  if (captionInput) {
+    const current = captionInput.value.trim();
+    if (!current.includes(tag)) {
+      captionInput.value = current ? `${current} ${tag}` : tag;
+    }
+    const countEl = document.getElementById('buf-caption-count');
+    if (countEl) countEl.textContent = captionInput.value.length + ' حرف';
+  }
+};
+
+window.toggleBufferScheduleInputs = function(isScheduled) {
+  const container = document.getElementById('buf-datetime-picker-container');
+  if (!container) return;
+  if (isScheduled) {
+    container.classList.remove('hidden');
+    const picker = document.getElementById('buffer-post-datetime');
+    if (picker && !picker.value) {
+      const d = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+      picker.value = d.toISOString().slice(0, 16);
+    }
+  } else {
+    container.classList.add('hidden');
+  }
+};
+
+window.submitPostToBuffer = async function() {
+  const token = (localStorage.getItem('buffer_api_key') || '').trim();
+  const channelSelect = document.getElementById('buffer-post-channel-select');
+  const channelId = channelSelect ? channelSelect.value.trim() : '';
+  const videoUrlInput = document.getElementById('buffer-post-video-url');
+  let videoUrl = videoUrlInput ? videoUrlInput.value.trim() : '';
+  const captionInput = document.getElementById('buffer-post-caption');
+  const caption = captionInput ? captionInput.value.trim() : '';
+  const isScheduleMode = document.querySelector('input[name="buf-publish-mode"]:checked')?.value === 'schedule';
+  const datetimePicker = document.getElementById('buffer-post-datetime');
+  const resultDiv = document.getElementById('buffer-publish-result');
+  const btn = document.getElementById('btn-submit-buffer-post');
+  
+  if (!token) {
+    alert('يرجى إدخال مفتاح Buffer API Key في الأعلى والتحقق من القنوات أولاً.');
+    logBufferAction('error', 'محاولة النشر بدون Buffer API Key.');
+    return;
+  }
+  if (!channelId) {
+    alert('يرجى اختيار القناة المستهدفة للنشر!');
+    logBufferAction('error', 'محاولة النشر بدون تحديد القناة المستهدفة.');
+    return;
+  }
+  
+  let scheduledAtIso = null;
+  if (isScheduleMode) {
+    const dtVal = datetimePicker?.value;
+    if (!dtVal) {
+      alert('يرجى تحديد تاريخ ووقت الجدولة!');
+      return;
+    }
+    const chosenDate = new Date(dtVal);
+    if (chosenDate.getTime() <= Date.now()) {
+      alert('تاريخ الجدولة يجب أن يكون في المستقبل!');
+      return;
+    }
+    scheduledAtIso = chosenDate.toISOString();
+  }
+  
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳</span> جاري تجهيز ورفع الفيديو...';
+  }
+  
+  // Auto-Upload to Cloudinary if not yet uploaded or if new video chosen
+  if (!videoUrl || videoUrl !== uploadedVideoCloudinaryUrl) {
+    let fileToUpload = bufferSelectedVideoFile || bufferSelectedVideoBlob;
+    
+    if (!fileToUpload && currentBufferVideoSource === 'current' && typeof renderTaskStatus !== 'undefined' && renderTaskStatus && renderTaskStatus.videoUrl) {
+      try {
+        const backendBase = (typeof apiUrl !== 'undefined' && apiUrl ? apiUrl : '').replace(/\/$/, '');
+        const fullUrl = `${backendBase}/${renderTaskStatus.videoUrl.replace(/^\//, '')}`;
+        logBufferAction('cloudinary', `جاري تنزيل ملف الفيديو من السيرفر قبل الرفع: ${fullUrl}`);
+        const res = await fetch(fullUrl);
+        fileToUpload = await res.blob();
+      } catch (e) {
+        logBufferAction('error', 'فشل جلب ملف الفيديو من السيرفر:', e.message);
+      }
+    }
+    
+    if (!fileToUpload && !videoUrl) {
+      alert('يرجى اختيار أو رفع ملف الفيديو أولاً!');
+      logBufferAction('error', 'محاولة النشر بدون وجود ملف فيديو أو رابط مباشر.');
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = '<span>🚀</span> نشر / جدولة المنشور على TikTok';
+      }
+      return;
+    }
+    
+    if (fileToUpload) {
+      if (resultDiv) {
+        resultDiv.style.display = 'block';
+        resultDiv.style.background = 'rgba(56, 189, 248, 0.15)';
+        resultDiv.style.border = '1px solid rgba(56, 189, 248, 0.4)';
+        resultDiv.style.color = '#38bdf8';
+        resultDiv.textContent = '⏳ جاري رفع الفيديو تلقائياً إلى Cloudinary أولاً...';
+      }
+      try {
+        videoUrl = await uploadToCloudinaryDirect(fileToUpload);
+      } catch (uploadErr) {
+        logBufferAction('error', 'فشل الرفع التلقائي إلى Cloudinary:', uploadErr.message);
+        if (resultDiv) {
+          resultDiv.style.background = 'rgba(239, 68, 68, 0.15)';
+          resultDiv.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+          resultDiv.style.color = '#fca5a5';
+          resultDiv.textContent = `❌ فشل رفع الفيديو: ${uploadErr.message}`;
+        }
+        if (btn) {
+          btn.disabled = false;
+          btn.innerHTML = '<span>🚀</span> نشر / جدولة المنشور على TikTok';
+        }
+        return;
+      }
+    }
+  }
+  
+  logBufferAction('buffer', `بدء إرسال المنشور إلى Buffer (Mode: ${isScheduleMode ? 'Custom Scheduled' : 'Share Now'}, Channel: ${channelId})...`);
+  
+  if (btn) {
+    btn.innerHTML = '<span>⏳</span> جاري إرسال المنشور إلى Buffer...';
+  }
+  if (resultDiv) {
+    resultDiv.style.display = 'block';
+    resultDiv.style.background = 'rgba(139, 92, 246, 0.15)';
+    resultDiv.style.border = '1px solid rgba(139, 92, 246, 0.4)';
+    resultDiv.style.color = '#c084fc';
+    resultDiv.textContent = isScheduleMode ? 'جاري جدولة المنشور عبر Buffer...' : 'جاري نشر الفيديو مباشرة على TikTok عبر Buffer...';
+  }
+  
+  try {
+    const isNow = !scheduledAtIso;
+    const mutation = `
+      mutation CreatePost($input: CreatePostInput!) {
+        createPost(input: $input) {
+          ... on PostActionSuccess {
+            post {
+              id
+              dueAt
+              status
+            }
+          }
+          ... on MutationError {
+            message
+          }
+        }
+      }
+    `;
+    
+    const inputPayload = {
+      channelId: channelId,
+      text: caption,
+      schedulingType: 'automatic',
+      mode: isNow ? 'shareNow' : 'customScheduled',
+      assets: [
+        {
+          video: {
+            url: videoUrl,
+            metadata: { thumbnailOffset: 2000 }
+          }
+        }
+      ]
+    };
+    if (!isNow && scheduledAtIso) {
+      inputPayload.dueAt = scheduledAtIso;
+    }
+    
+    logBufferAction('buffer', 'GraphQL Mutation Payload:', inputPayload);
+    
+    let postResult = null;
+    let publishSuccess = false;
+    
+    // Attempt 1: Direct GraphQL call
+    try {
+      logBufferAction('buffer', 'محاولة النشر المباشر عبر https://api.buffer.com...');
+      const res = await fetch('https://api.buffer.com', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          query: mutation,
+          variables: { input: inputPayload }
+        })
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        logBufferAction('buffer', 'استجابة Buffer المباشرة:', data);
+        if (data.errors && data.errors.length > 0) {
+          throw new Error(data.errors[0].message || 'خطأ في استجابة Buffer');
+        }
+        const createPostRes = data?.data?.createPost;
+        if (createPostRes?.message) {
+          throw new Error(createPostRes.message);
+        }
+        if (createPostRes?.post) {
+          postResult = createPostRes.post;
+          publishSuccess = true;
+        }
+      }
+    } catch (directErr) {
+      logBufferAction('info', `النشر المباشر تعذر (${directErr.message})، جاري النشر عبر السيرفر الوسيط...`);
+    }
+    
+    // Attempt 2: Fallback to backend proxy
+    if (!publishSuccess) {
+      const backendBase = (typeof apiUrl !== 'undefined' && apiUrl ? apiUrl : '').replace(/\/$/, '');
+      logBufferAction('info', `إرسال طلب النشر إلى السيرفر: ${backendBase}/api/buffer/publish`);
+      const proxyRes = await fetch(backendBase + '/api/buffer/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: token,
+          channel_id: channelId,
+          text: caption,
+          video_url: videoUrl,
+          scheduled_at: scheduledAtIso,
+          is_now: isNow
+        })
+      });
+      const proxyData = await proxyRes.json();
+      logBufferAction('buffer', 'استجابة السيرفر الوسيط:', proxyData);
+      if (!proxyRes.ok || proxyData.error || proxyData.detail || proxyData.status === 'error') {
+        throw new Error(proxyData.error || proxyData.detail || 'فشل النشر عبر Buffer');
+      }
+      postResult = proxyData.post || {};
+      publishSuccess = true;
+    }
+    
+    if (resultDiv) {
+      resultDiv.style.background = 'rgba(16, 185, 129, 0.15)';
+      resultDiv.style.border = '1px solid rgba(16, 185, 129, 0.4)';
+      resultDiv.style.color = '#6ee7b7';
+      const postIdText = postResult?.id ? `(معرف المنشور: ${postResult.id})` : '';
+      resultDiv.textContent = isScheduleMode 
+        ? `🎉 تم جدولة المنشور بنجاح على Buffer! ${postIdText}`
+        : `🎉 تم إرسال الفيديو للنشر الفوري على TikTok بنجاح! ${postIdText}`;
+    }
+    
+    logBufferAction('success', `🎉 تم ${isScheduleMode ? 'جدولة' : 'نشر'} المنشور بنجاح على Buffer!`, postResult);
+    
+    if (typeof playSuccessSound === 'function') {
+      playSuccessSound();
+    }
+
+    // Auto-refresh scheduled posts list if in schedule mode
+    if (isScheduleMode) {
+      setTimeout(() => {
+        fetchScheduledBufferPosts();
+      }, 1500);
+    }
+  } catch (err) {
+    console.error('Buffer publish error:', err);
+    logBufferAction('error', `❌ خطأ في عملية النشر: ${err.message}`, err);
+    if (resultDiv) {
+      resultDiv.style.background = 'rgba(239, 68, 68, 0.15)';
+      resultDiv.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+      resultDiv.style.color = '#fca5a5';
+      resultDiv.textContent = `❌ خطأ في النشر: ${err.message || 'تعذر إتمام العملية'}`;
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>🚀</span> نشر / جدولة المنشور على TikTok';
+    }
+  }
+};
+
+// ==================== Sub-Tab Switcher (Single vs Bulk) ====================
+let currentBufferSubTab = 'single';
+
+window.switchBufferSubTab = function(tab) {
+  currentBufferSubTab = tab;
+  const singleBtn = document.getElementById('buf-subtab-single');
+  const bulkBtn = document.getElementById('buf-subtab-bulk');
+  const singleView = document.getElementById('buf-subview-single');
+  const bulkView = document.getElementById('buf-subview-bulk');
+
+  if (tab === 'single') {
+    if (singleBtn) {
+      singleBtn.style.background = 'rgba(139, 92, 246, 0.25)';
+      singleBtn.style.borderColor = 'var(--purple-accent)';
+      singleBtn.style.color = '#fff';
+      singleBtn.style.fontWeight = '700';
+    }
+    if (bulkBtn) {
+      bulkBtn.style.background = 'transparent';
+      bulkBtn.style.borderColor = 'transparent';
+      bulkBtn.style.color = 'rgba(255,255,255,0.7)';
+      bulkBtn.style.fontWeight = 'normal';
+    }
+    if (singleView) singleView.classList.remove('hidden');
+    if (bulkView) bulkView.classList.add('hidden');
+  } else {
+    if (bulkBtn) {
+      bulkBtn.style.background = 'rgba(139, 92, 246, 0.25)';
+      bulkBtn.style.borderColor = 'var(--purple-accent)';
+      bulkBtn.style.color = '#fff';
+      bulkBtn.style.fontWeight = '700';
+    }
+    if (singleBtn) {
+      singleBtn.style.background = 'transparent';
+      singleBtn.style.borderColor = 'transparent';
+      singleBtn.style.color = 'rgba(255,255,255,0.7)';
+      singleBtn.style.fontWeight = 'normal';
+    }
+    if (bulkView) bulkView.classList.remove('hidden');
+    if (singleView) singleView.classList.add('hidden');
+    
+    initBulkScheduler();
+  }
+};
+
+// ==================== Scheduled Posts Manager ====================
+let cachedScheduledPosts = [];
+
+window.fetchScheduledBufferPosts = async function() {
+  const token = (localStorage.getItem('buffer_api_key') || '').trim();
+  const btn = document.getElementById('btn-refresh-scheduled-posts');
+  const badge = document.getElementById('buf-scheduled-count-badge');
+  
+  if (!token) {
+    renderScheduledPostsList([]);
+    return;
+  }
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳</span> جاري التحديث...';
+  }
+  logBufferAction('buffer', 'جاري جلب قائمة المنشورات المجدولة من Buffer...');
+
+  try {
+    let posts = [];
+    let fetchSuccess = false;
+
+    // Direct GraphQL
+    try {
+      const orgRes = await fetch('https://api.buffer.com', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          query: `query { account { organizations { id } } }`
+        })
+      });
+      if (orgRes.ok) {
+        const orgData = await orgRes.json();
+        const orgs = orgData?.data?.account?.organizations || [];
+        for (const org of orgs) {
+          const postsRes = await fetch('https://api.buffer.com', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+              query: `
+                query GetScheduledPosts {
+                  posts(input: {
+                    organizationId: "${org.id}"
+                    filter: { status: [scheduled] }
+                  }, first: 50) {
+                    edges {
+                      node {
+                        id
+                        text
+                        dueAt
+                        status
+                        channelId
+                        assets {
+                          id
+                          mimeType
+                          source
+                        }
+                      }
+                    }
+                  }
+                }
+              `
+            })
+          });
+          if (postsRes.ok) {
+            const pdata = await postsRes.json();
+            const edges = pdata?.data?.posts?.edges || [];
+            edges.forEach(e => { if (e.node) posts.push(e.node); });
+          }
+        }
+        fetchSuccess = true;
+      }
+    } catch (directErr) {
+      logBufferAction('info', 'جاري جلب المنشورات المجدولة عبر السيرفر الوسيط...');
+    }
+
+    // Proxy Fallback
+    if (!fetchSuccess) {
+      const backendBase = (typeof apiUrl !== 'undefined' && apiUrl ? apiUrl : '').replace(/\/$/, '');
+      const proxyRes = await fetch(backendBase + '/api/buffer/posts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: token })
+      });
+      const proxyData = await proxyRes.json();
+      if (proxyRes.ok && Array.isArray(proxyData.posts)) {
+        posts = proxyData.posts;
+        fetchSuccess = true;
+      }
+    }
+
+    cachedScheduledPosts = posts;
+    renderScheduledPostsList(posts);
+    logBufferAction('success', `تم جلب ${posts.length} منشور مجدول بنجاح!`);
+  } catch (err) {
+    console.error('Error fetching scheduled posts:', err);
+    logBufferAction('error', 'فشل جلب المنشورات المجدولة:', err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<span>🔄</span> تحديث القائمة';
+    }
+  }
+};
+
+function formatArabicRelativeTime(dateStr) {
+  if (!dateStr) return '';
+  const target = new Date(dateStr);
+  const now = new Date();
+  const diffMs = target.getTime() - now.getTime();
+  
+  if (diffMs <= 0) return 'موعد النشر الآن أو في الماضي القريب';
+  
+  const diffMins = Math.round(diffMs / (1000 * 60));
+  const diffHours = Math.round(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
+  
+  if (diffMins < 60) return `بعد ${diffMins} دقيقة`;
+  if (diffHours < 24) return `بعد ${diffHours} ساعة`;
+  if (diffDays === 1) return 'غداً';
+  if (diffDays === 2) return 'بعد يومين';
+  return `بعد ${diffDays} أيام`;
+}
+
+function renderScheduledPostsList(posts) {
+  const container = document.getElementById('buffer-scheduled-posts-container');
+  const badge = document.getElementById('buf-scheduled-count-badge');
+  if (!container) return;
+  
+  if (badge) badge.textContent = `${posts.length} منشورات`;
+  
+  if (!posts || posts.length === 0) {
+    container.innerHTML = `
+      <div id="buffer-scheduled-empty" style="grid-column: 1 / -1; text-align: center; padding: 30px 20px; background: rgba(0,0,0,0.2); border-radius: 10px; border: 1px dashed rgba(255,255,255,0.1); color: var(--text-muted); font-size: 13px;">
+        <span>⏳ لا توجد منشورات مجدولة حالياً.</span>
+      </div>
+    `;
+    return;
+  }
+  
+  let channels = window.bufferChannels || [];
+  if (channels.length === 0) {
+    try {
+      channels = JSON.parse(localStorage.getItem('buffer_cached_channels') || '[]');
+    } catch (e) {}
+  }
+  
+  // Sort posts by dueAt ascending
+  posts.sort((a, b) => new Date(a.dueAt || 0) - new Date(b.dueAt || 0));
+  
+  let html = '';
+  posts.forEach((post, idx) => {
+    const channel = channels.find(c => c.id === post.channelId) || {};
+    const channelName = channel.displayName || channel.name || 'قناة TikTok';
+    const isTikTok = (channel.service || '').toLowerCase() === 'tiktok';
+    const serviceTag = isTikTok ? '🎵 TikTok' : (channel.service ? `🌐 ${channel.service.toUpperCase()}` : 'Buffer Channel');
+    
+    const dueDate = post.dueAt ? new Date(post.dueAt) : null;
+    const dateFormatted = dueDate ? dueDate.toLocaleDateString('ar-EG', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'غير محدد';
+    const relativeTime = post.dueAt ? formatArabicRelativeTime(post.dueAt) : '';
+    
+    const videoAsset = (post.assets || []).find(a => (a.mimeType || '').includes('video') || (a.source || '').includes('cloudinary') || (a.source || '').includes('mp4'));
+    const videoUrl = videoAsset ? videoAsset.source : '';
+    
+    const snippetText = post.text ? (post.text.length > 90 ? post.text.slice(0, 90) + '...' : post.text) : 'بدون وصف نصي';
+    
+    html += `
+      <div style="background: rgba(15,23,42,0.8); border: 1px solid rgba(168,85,247,0.3); border-radius: 12px; padding: 14px; display: flex; flex-direction: column; justify-content: space-between; gap: 10px; transition: all 0.3s;">
+        
+        <div>
+          <!-- Header: Channel & Relative Time -->
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <span style="font-size: 11px; font-weight: 700; color: #c084fc; background: rgba(168,85,247,0.15); padding: 2px 8px; border-radius: 6px;">
+              ${serviceTag}: ${channelName}
+            </span>
+            <span style="font-size: 10px; font-weight: 800; color: #10b981; background: rgba(16,185,129,0.15); padding: 2px 6px; border-radius: 6px;">
+              ⏳ ${relativeTime}
+            </span>
+          </div>
+
+          <!-- Video Preview if available -->
+          ${videoUrl ? `
+            <div style="border-radius: 6px; overflow: hidden; background: #000; margin-bottom: 8px; text-align: center;">
+              <video src="${videoUrl}" controls playsinline style="max-height: 120px; width: 100%; object-fit: contain;"></video>
+            </div>
+          ` : ''}
+
+          <!-- Text Preview -->
+          <div style="font-size: 12px; color: #f1f5f9; line-height: 1.4; white-space: pre-wrap; background: rgba(0,0,0,0.3); padding: 8px; border-radius: 6px;">${snippetText}</div>
+        </div>
+
+        <div>
+          <!-- Schedule Timing Details -->
+          <div style="display: flex; align-items: center; gap: 6px; font-size: 11px; color: #94a3b8; margin-bottom: 10px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 8px;">
+            <span>📅 الموعد:</span>
+            <span style="color: #fff; font-weight: 600;">${dateFormatted}</span>
+          </div>
+
+          <!-- Action Buttons -->
+          <div style="display: flex; gap: 6px;">
+            <button type="button" onclick="deleteScheduledBufferPost('${post.id}')" class="btn-secondary" style="width: 100%; justify-content: center; font-size: 11px; padding: 6px 10px; color: #fca5a5; border-color: rgba(239,68,68,0.4); background: rgba(239,68,68,0.1);">
+              <span>🗑️</span> إلغاء وحذف الجدولة
+            </button>
+          </div>
+        </div>
+
+      </div>
+    `;
+  });
+  
+  container.innerHTML = html;
+}
+
+window.deleteScheduledBufferPost = async function(postId) {
+  if (!postId) return;
+  const token = (localStorage.getItem('buffer_api_key') || '').trim();
+  if (!token) {
+    alert('Buffer API Key غير موجود!');
+    return;
+  }
+  
+  if (!confirm('هل أنت متأكد من رغبتك في إلغاء وحذف هذا المنشور المجدول من Buffer؟')) {
+    return;
+  }
+  
+  logBufferAction('buffer', `جاري حذف المنشور المجدول: ID ${postId}...`);
+  
+  try {
+    let deleteSuccess = false;
+    let errorDetail = '';
+    
+    // Direct GraphQL
+    try {
+      const res = await fetch('https://api.buffer.com', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          query: `
+            mutation DeletePost($input: DeletePostInput!) {
+              deletePost(input: $input) {
+                ... on DeletePostSuccess {
+                  id
+                }
+                ... on VoidMutationError {
+                  message
+                }
+                ... on MutationError {
+                  message
+                }
+              }
+            }
+          `,
+          variables: { input: { id: postId } }
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        logBufferAction('buffer', 'استجابة Buffer المباشرة للحذف:', data);
+        const delRes = data?.data?.deletePost;
+        if (delRes?.id || delRes?.__typename === 'DeletePostSuccess') {
+          deleteSuccess = true;
+        } else if (delRes?.message) {
+          errorDetail = delRes.message;
+        }
+      }
+    } catch (e) {
+      logBufferAction('info', 'جاري إرسال طلب الحذف عبر السيرفر الوسيط...');
+    }
+
+    // Fallback Proxy
+    if (!deleteSuccess) {
+      const backendBase = (typeof apiUrl !== 'undefined' && apiUrl ? apiUrl : '').replace(/\/$/, '');
+      const proxyRes = await fetch(backendBase + '/api/buffer/delete-post', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: token, post_id: postId })
+      });
+      const pdata = await proxyRes.json();
+      logBufferAction('buffer', 'استجابة السيرفر الوسيط لحذف المنشور:', pdata);
+      if (proxyRes.ok && pdata.status === 'success') {
+        deleteSuccess = true;
+      } else if (pdata.error || pdata.detail) {
+        errorDetail = pdata.error || pdata.detail;
+      }
+    }
+
+    if (deleteSuccess) {
+      logBufferAction('success', `تم حذف وإلغاء جدولة المنشور ${postId} بنجاح!`);
+      alert('✅ تم حذف وإلغاء جدولة المنشور بنجاح!');
+      fetchScheduledBufferPosts();
+    } else {
+      throw new Error(errorDetail || 'تعذر حذف المنشور من Buffer.');
+    }
+  } catch (err) {
+    console.error('Delete post error:', err);
+    logBufferAction('error', `فشل حذف المنشور: ${err.message}`);
+    alert('❌ خطأ أثناء حذف المنشور: ' + err.message);
+  }
+};
+
+// ==================== Bulk Auto-Scheduler Logic ====================
+let availableBulkClips = [];
+
+window.initBulkScheduler = function() {
+  // Sync channels to bulk channel select
+  const mainSelect = document.getElementById('buffer-post-channel-select');
+  const bulkSelect = document.getElementById('buf-bulk-channel-select');
+  if (mainSelect && bulkSelect) {
+    bulkSelect.innerHTML = mainSelect.innerHTML;
+  }
+  
+  // Set default start date (Tomorrow)
+  const dateInput = document.getElementById('buf-bulk-start-date');
+  if (dateInput && !dateInput.value) {
+    const d = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    dateInput.value = d.toISOString().slice(0, 10);
+  }
+
+  populateBulkClipsList();
+};
+
+window.handleBulkFrequencyChange = function(val) {
+  const customWrapper = document.getElementById('buf-bulk-custom-count-wrapper');
+  if (customWrapper) {
+    if (val === 'daily_custom') {
+      customWrapper.classList.remove('hidden');
+    } else {
+      customWrapper.classList.add('hidden');
+    }
+  }
+  updateBulkScheduleTimelinePreview();
+};
+
+window.populateBulkClipsList = function(showNotification = false) {
+  const container = document.getElementById('buf-bulk-clips-container');
+  if (!container) return;
+
+  const historyEntries = typeof getHistoryEntries === 'function' ? getHistoryEntries() : [];
+  availableBulkClips = historyEntries.map(e => ({
+    id: e.id,
+    title: cleanClipTitle(e.title || 'فيديو مقطع'),
+    rawTitle: e.title || 'فيديو مقطع',
+    serverUrl: e.serverUrl || '',
+    timestamp: e.timestamp
+  }));
+
+  if (availableBulkClips.length === 0) {
+    container.innerHTML = `
+      <div style="text-align: center; color: var(--text-muted); padding: 20px; font-size: 13px; background: rgba(0,0,0,0.2); border-radius: 8px;">
+        ⚠️ لا توجد مقاطع في الأرشيف حالياً. قم بإنشاء أو قص مقاطع Shorts في المحرر لتظهر هنا للجدولة الجماعية.
+      </div>
+    `;
+    return;
+  }
+
+  let html = '';
+  availableBulkClips.forEach((clip, idx) => {
+    html += `
+      <div style="display: flex; align-items: center; justify-content: space-between; background: rgba(15,23,42,0.8); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 10px 14px; gap: 10px;">
+        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; min-width: 0;">
+          <input type="checkbox" class="buf-bulk-clip-checkbox" value="${clip.id}" checked onchange="updateBulkScheduleTimelinePreview()" style="width: 16px; height: 16px; accent-color: var(--purple-accent); cursor: pointer;" />
+          <span style="font-size: 13px; font-weight: 700; color: #fff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">
+            🎬 ${clip.title}
+          </span>
+        </label>
+        <span id="buf-bulk-time-preview-${clip.id}" style="font-size: 11px; font-weight: 700; color: #38bdf8; background: rgba(56,189,248,0.1); padding: 3px 8px; border-radius: 6px; white-space: nowrap;">
+          📅 جاري الحساب...
+        </span>
+      </div>
+    `;
+  });
+
+  container.innerHTML = html;
+  updateBulkScheduleTimelinePreview();
+  if (showNotification) {
+    logBufferAction('info', `🔄 تم تحديث قائمة المقاطع المتاحة للجدولة (${availableBulkClips.length} مقطع).`);
+  }
+};
+
+window.selectAllBulkClips = function(checked) {
+  const checkboxes = document.querySelectorAll('.buf-bulk-clip-checkbox');
+  checkboxes.forEach(cb => { cb.checked = checked; });
+  updateBulkScheduleTimelinePreview();
+};
+
+window.updateBulkScheduleTimelinePreview = function() {
+  const checkboxes = Array.from(document.querySelectorAll('.buf-bulk-clip-checkbox:checked'));
+  const freq = document.getElementById('buf-bulk-freq')?.value || 'daily_5';
+  const timeStr = document.getElementById('buf-bulk-time')?.value || '14:00';
+  const startDateStr = document.getElementById('buf-bulk-start-date')?.value;
+
+  if (!startDateStr) return;
+
+  const [startH, startM] = timeStr.split(':').map(Number);
+  let baseDate = new Date(startDateStr);
+  baseDate.setHours(startH, startM, 0, 0);
+
+  let postsPerDay = 1;
+  let isDailyMode = false;
+
+  if (freq === 'daily_1') {
+    postsPerDay = 1;
+    isDailyMode = true;
+  } else if (freq === 'daily_2') {
+    postsPerDay = 2;
+    isDailyMode = true;
+  } else if (freq === 'daily_3') {
+    postsPerDay = 3;
+    isDailyMode = true;
+  } else if (freq === 'daily_4') {
+    postsPerDay = 4;
+    isDailyMode = true;
+  } else if (freq === 'daily_5') {
+    postsPerDay = 5;
+    isDailyMode = true;
+  } else if (freq === 'daily_custom') {
+    postsPerDay = Math.max(1, parseInt(document.getElementById('buf-bulk-custom-count')?.value || '5', 10));
+    isDailyMode = true;
+  }
+
+  checkboxes.forEach((cb, idx) => {
+    const clipId = cb.value;
+    const previewEl = document.getElementById(`buf-bulk-time-preview-${clipId}`);
+    if (!previewEl) return;
+
+    let targetDate = new Date(baseDate);
+
+    if (isDailyMode) {
+      const dayOffset = Math.floor(idx / postsPerDay);
+      const slotInDay = idx % postsPerDay;
+      
+      targetDate.setDate(baseDate.getDate() + dayOffset);
+      
+      // Calculate interval in minutes between posts on the same day (across ~10 active hours)
+      const minutesInterval = postsPerDay <= 1 ? 0 : Math.round((10 * 60) / Math.max(1, postsPerDay - 1));
+      const totalSlotMinutes = (startH * 60 + startM) + (slotInDay * minutesInterval);
+      
+      const finalH = Math.floor(totalSlotMinutes / 60) % 24;
+      const finalM = totalSlotMinutes % 60;
+      targetDate.setHours(finalH, finalM, 0, 0);
+    } else if (freq === 'every_other_day') {
+      targetDate.setDate(baseDate.getDate() + (idx * 2));
+    } else if (freq === 'weekly_3') {
+      // 3 times a week (Mon, Wed, Fri pattern roughly every 2-3 days)
+      const dayJumps = [0, 2, 4, 7, 9, 11, 14, 16, 18];
+      const jump = dayJumps[idx] !== undefined ? dayJumps[idx] : idx * 2;
+      targetDate.setDate(baseDate.getDate() + jump);
+    }
+
+    const formatted = targetDate.toLocaleDateString('ar-EG', { weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    previewEl.textContent = `📅 ${formatted}`;
+    previewEl.dataset.isoDate = targetDate.toISOString();
+  });
+};
+
+window.executeBulkScheduleQueue = async function() {
+  const token = (localStorage.getItem('buffer_api_key') || '').trim();
+  const channelSelect = document.getElementById('buf-bulk-channel-select');
+  const channelId = channelSelect ? channelSelect.value.trim() : '';
+  const checkboxes = Array.from(document.querySelectorAll('.buf-bulk-clip-checkbox:checked'));
+  const btn = document.getElementById('btn-execute-bulk-schedule');
+  const progressContainer = document.getElementById('buf-bulk-progress-container');
+  const progressBar = document.getElementById('buf-bulk-progress-bar');
+  const progressStatus = document.getElementById('buf-bulk-progress-status');
+  const progressPercent = document.getElementById('buf-bulk-progress-percent');
+  const resultMsg = document.getElementById('buf-bulk-result-msg');
+
+  if (!token) {
+    alert('يرجى إدخال مفتاح Buffer API Key في الأعلى أولاً.');
+    return;
+  }
+  if (!channelId) {
+    alert('يرجى اختيار القناة المستهدفة للنشر من قائمة إعدادات الدفعة!');
+    return;
+  }
+  if (checkboxes.length === 0) {
+    alert('يرجى تحديد مقطع واحد على الأقل للجدولة!');
+    return;
+  }
+
+  if (!confirm(`هل أنت متأكد من رغبتك في جدولة (${checkboxes.length}) مقاطع تلقائياً على Buffer؟`)) {
+    return;
+  }
+
+  if (btn) btn.disabled = true;
+  if (progressContainer) progressContainer.classList.remove('hidden');
+  if (resultMsg) resultMsg.style.display = 'none';
+
+  logBufferAction('buffer', `بدء المعالجة والجدولة التلقائية لحزمة من (${checkboxes.length}) مقاطع...`);
+
+  let successCount = 0;
+  let failCount = 0;
+  const historyEntries = typeof getHistoryEntries === 'function' ? getHistoryEntries() : [];
+
+  for (let i = 0; i < checkboxes.length; i++) {
+    const cb = checkboxes[i];
+    const clipId = cb.value;
+    const clip = historyEntries.find(e => e.id === clipId) || { id: clipId, title: 'مقطع' };
+    const cleanTitle = cleanClipTitle(clip.title || 'مقطع Shorts');
+    const previewEl = document.getElementById(`buf-bulk-time-preview-${clipId}`);
+    const scheduledAtIso = previewEl?.dataset?.isoDate || new Date(Date.now() + (i + 1) * 24 * 3600 * 1000).toISOString();
+
+    const percent = Math.round(((i) / checkboxes.length) * 100);
+    if (progressBar) progressBar.style.width = percent + '%';
+    if (progressPercent) progressPercent.textContent = percent + '%';
+    if (progressStatus) progressStatus.textContent = `جاري تجهيز ورفع مقطع (${i + 1} من ${checkboxes.length}): ${cleanTitle}...`;
+
+    logBufferAction('info', `[دُفعة ${i + 1}/${checkboxes.length}] بدء معالجة: ${cleanTitle}`);
+
+    try {
+      // Check Cloudinary Cache First (0 seconds upload if already uploaded!)
+      let videoUrl = localStorage.getItem('cld_cache_' + clip.id) || localStorage.getItem('cld_cache_' + (clip.title || ''));
+      
+      if (videoUrl) {
+        logBufferAction('cloudinary', `[دُفعة ${i + 1}/${checkboxes.length}] ⚡ تم استخدام رابط Cloudinary المخزن مسبقاً (0 ثانية)!`);
+      } else {
+        // Step 1: Get Video Blob
+        let blob = null;
+        if (typeof getVideoBlobFromIDB === 'function') {
+          blob = await getVideoBlobFromIDB(clip.id);
+        }
+        if (!blob && clip.serverUrl) {
+          const res = await fetch(clip.serverUrl);
+          blob = await res.blob();
+        }
+        if (!blob) {
+          throw new Error('تعذر العثور على ملف الفيديو في الذاكرة.');
+        }
+
+        // Step 2: Fast Upload to Cloudinary
+        logBufferAction('cloudinary', `[دُفعة ${i + 1}/${checkboxes.length}] رفع الفيديو إلى Cloudinary...`);
+        const fileToUpload = new File([blob], `${cleanTitle}.mp4`, { type: 'video/mp4' });
+        videoUrl = await uploadToCloudinaryDirect(fileToUpload);
+        
+        // Save to cache
+        try {
+          localStorage.setItem('cld_cache_' + clip.id, videoUrl);
+          if (clip.title) localStorage.setItem('cld_cache_' + clip.title, videoUrl);
+        } catch (ce) {}
+      }
+
+      // Step 3: Generate Clean Caption & Contextual Hashtags
+      const { caption } = generateSmartCaptionAndHashtags(cleanTitle);
+
+      // Step 4: Schedule Post via Buffer Proxy/Direct
+      logBufferAction('buffer', `[دُفعة ${i + 1}/${checkboxes.length}] إرسال الجدولة إلى Buffer لموعد: ${scheduledAtIso}`);
+      
+      const backendBase = (typeof apiUrl !== 'undefined' && apiUrl ? apiUrl : '').replace(/\/$/, '');
+      const proxyRes = await fetch(backendBase + '/api/buffer/publish', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: token,
+          channel_id: channelId,
+          text: caption,
+          video_url: videoUrl,
+          scheduled_at: scheduledAtIso,
+          is_now: false
+        })
+      });
+      const proxyData = await proxyRes.json();
+      if (!proxyRes.ok || proxyData.error || proxyData.status === 'error') {
+        throw new Error(proxyData.error || proxyData.detail || 'فشل الجدولة عبر Buffer');
+      }
+
+      successCount++;
+      logBufferAction('success', `✅ تم جدولة مقطع (${i + 1}/${checkboxes.length}) بنجاح! ID: ${proxyData.post?.id || ''}`);
+    } catch (clipErr) {
+      failCount++;
+      logBufferAction('error', `❌ فشلت جدولة مقطع (${cleanTitle}): ${clipErr.message}`);
+    }
+  }
+
+  if (progressBar) progressBar.style.width = '100%';
+  if (progressPercent) progressPercent.textContent = '100% مكتمل!';
+  if (progressStatus) progressStatus.textContent = 'اكتملت معالجة الدفعة!';
+
+  if (resultMsg) {
+    resultMsg.style.display = 'block';
+    resultMsg.style.background = successCount > 0 ? 'rgba(16, 185, 129, 0.15)' : 'rgba(239, 68, 68, 0.15)';
+    resultMsg.style.border = successCount > 0 ? '1px solid rgba(16, 185, 129, 0.4)' : '1px solid rgba(239, 68, 68, 0.4)';
+    resultMsg.style.color = successCount > 0 ? '#6ee7b7' : '#fca5a5';
+    resultMsg.textContent = `🎉 اكتملت العملية: تم جدولة (${successCount}) مقاطع بنجاح${failCount > 0 ? `، وفشل (${failCount})` : ''}!`;
+  }
+
+  if (typeof playSuccessSound === 'function') {
+    playSuccessSound();
+  }
+
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = '<span>🚀</span> بدء الجدولة التلقائية لجميع المقاطع المحددة';
+  }
+
+  // Refresh scheduled posts list
+  setTimeout(() => {
+    fetchScheduledBufferPosts();
+  }, 1500);
+};
+
+window.initBufferTab = function() {
+  const savedToken = localStorage.getItem('buffer_api_key');
+  const savedCloudName = localStorage.getItem('cloudinary_cloud_name');
+  const savedPreset = localStorage.getItem('cloudinary_upload_preset');
+  const cachedChannels = localStorage.getItem('buffer_cached_channels');
+  
+  const tokenInput = document.getElementById('buffer-api-key-input');
+  const cloudNameInput = document.getElementById('cloudinary-cloud-name');
+  const presetInput = document.getElementById('cloudinary-upload-preset');
+  
+  if (tokenInput && savedToken) tokenInput.value = savedToken;
+  if (cloudNameInput && savedCloudName) cloudNameInput.value = savedCloudName;
+  if (presetInput && savedPreset) presetInput.value = savedPreset;
+  
+  if (cachedChannels) {
+    try {
+      const parsed = JSON.parse(cachedChannels);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        renderBufferChannelsList(parsed);
+      }
+    } catch (e) {
+      console.warn('Error parsing cached buffer channels:', e);
+    }
+  }
+  
+  // Set default datetime picker
+  const picker = document.getElementById('buffer-post-datetime');
+  if (picker && !picker.value) {
+    const d = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    picker.value = d.toISOString().slice(0, 16);
+  }
+
+  // Fetch scheduled posts
+  if (savedToken) {
+    fetchScheduledBufferPosts();
+  }
+};
+
+// ==================== Vertical Video Conversion (KIM Algorithm) ====================
+let currentConvertSource = 'local';
+let convertFile = null;
+let lastConvertedBlob = null;
+
+window.switchConvertSource = function(source) {
+  currentConvertSource = source;
+  const localBtn = document.getElementById('convert-tab-local');
+  const ytBtn = document.getElementById('convert-tab-yt');
+  const localBox = document.getElementById('convert-local-box');
+  const ytBox = document.getElementById('convert-yt-box');
+
+  if (source === 'local') {
+    if (localBtn) localBtn.classList.add('active');
+    if (ytBtn) ytBtn.classList.remove('active');
+    if (localBox) localBox.classList.remove('hidden');
+    if (ytBox) ytBox.classList.add('hidden');
+  } else {
+    if (ytBtn) ytBtn.classList.add('active');
+    if (localBtn) localBtn.classList.remove('active');
+    if (ytBox) ytBox.classList.remove('hidden');
+    if (localBox) localBox.classList.add('hidden');
+  }
+};
+
+window.handleConvertFileSelect = function(file) {
+  if (!file) return;
+  convertFile = file;
+  const label = document.getElementById('convert-file-label');
+  if (label) {
+    label.innerHTML = `
+      <span style="font-size: 32px; display: block; margin-bottom: 8px;">🎬</span>
+      <span style="font-size: 14px; color: #fff; font-weight: 600;">${file.name}</span>
+    `;
+  }
+};
+
+window.startVerticalConversion = async function() {
+  const startBtn = document.getElementById('convert-start-btn');
+  const loadingDiv = document.getElementById('convert-loading');
+  const statusText = document.getElementById('convert-status-text');
+  const progressBar = document.getElementById('convert-progress-bar');
+  const resultContainer = document.getElementById('convert-result-container');
+  const videoPlayer = document.getElementById('convert-video-player');
+  const downloadBtn = document.getElementById('convert-download-btn');
+  const ytUrlInput = document.getElementById('convert-yt-url');
+
+  if (currentConvertSource === 'local' && !convertFile) {
+    alert('يرجى اختيار ملف فيديو أولاً للتحويل إلى طولي!');
+    return;
+  }
+  if (currentConvertSource === 'youtube' && (!ytUrlInput || !ytUrlInput.value.trim())) {
+    alert('يرجى إدخال رابط فيديو يوتيوب أصلي (16:9)!');
+    return;
+  }
+
+  startBtn.disabled = true;
+  startBtn.style.opacity = '0.5';
+  startBtn.style.pointerEvents = 'none';
+  loadingDiv.classList.remove('hidden');
+  resultContainer.classList.add('hidden');
+  progressBar.style.width = '10%';
+  statusText.textContent = 'جاري رفع الملف وتهيئة المعالجة...';
+
+  try {
+    const fd = new FormData();
+    if (currentConvertSource === 'local') {
+      fd.append('file', convertFile);
+    } else {
+      fd.append('youtubeUrl', ytUrlInput.value.trim());
+    }
+
+    const res = await fetch(audioApiUrl + '/api/convert-vertical-async', {
+      method: 'POST',
+      body: fd
+    });
+
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ detail: 'فشل بدء معالجة تحويل الفيديو.' }));
+      throw new Error(errData.detail || 'فشلت معالجة الطلب على السيرفر.');
+    }
+
+    const startData = await res.json();
+    const taskId = startData.taskId;
+
+    let pollInterval = null;
+    const task = await new Promise((resolve, reject) => {
+      pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`${audioApiUrl}/api/task-status/${taskId}`);
+          if (!statusRes.ok) {
+            clearInterval(pollInterval);
+            reject(new Error('فشل متابعة حالة التحويل من السيرفر.'));
+            return;
+          }
+          const t = await statusRes.json();
+          if (t.status === 'success') {
+            clearInterval(pollInterval);
+            resolve(t);
+          } else if (t.status === 'failed') {
+            clearInterval(pollInterval);
+            reject(new Error(t.error || 'فشلت عملية تحويل الفيديو إلى طولي.'));
+          } else {
+            if (t.progress) {
+              statusText.textContent = t.progress;
+              if (t.progress.includes('100%')) {
+                progressBar.style.width = '95%';
+              } else if (t.progress.includes('المشاهد')) {
+                progressBar.style.width = '30%';
+              } else if (t.progress.includes('الوجوه')) {
+                progressBar.style.width = '55%';
+              } else if (t.progress.includes('الإطارات')) {
+                progressBar.style.width = '80%';
+              }
+            }
+          }
+        } catch (e) {
+          clearInterval(pollInterval);
+          reject(e);
+        }
+      }, 2000);
+    });
+
+    progressBar.style.width = '100%';
+    statusText.textContent = '✅ اكتمل التحويل بنجاح!';
+
+    const videoUrl = task.videoUrl.startsWith('http') ? task.videoUrl : (audioApiUrl + '/' + task.videoUrl);
+    const videoBlobRes = await fetch(videoUrl);
+    if (!videoBlobRes.ok) {
+      throw new Error('فشل جلب ملف الفيديو الطولي الناتج من السيرفر.');
+    }
+
+    lastConvertedBlob = await videoBlobRes.blob();
+    const localVideoUrl = URL.createObjectURL(lastConvertedBlob);
+
+    videoPlayer.src = localVideoUrl;
+    downloadBtn.href = localVideoUrl;
+    resultContainer.classList.remove('hidden');
+
+    // Auto-save vertical converted video to 48-Hour Video Archive
+    if (typeof window.saveHistoryEntry === 'function') {
+      try {
+        await window.saveHistoryEntry({
+          title: 'فيديو طولي (9:16) (' + new Date().toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }) + ')',
+          videoUrl: localVideoUrl,
+          serverUrl: videoUrl,
+          blob: lastConvertedBlob
+        });
+      } catch (saveErr) {
+        console.warn('Auto-save vertical converter to archive error:', saveErr);
+      }
+    }
+
+  } catch (err) {
+    console.error(err);
+    alert('حدث خطأ أثناء تحويل الفيديو إلى طولي: ' + err.message);
+  } finally {
+    startBtn.disabled = false;
+    startBtn.style.opacity = '1';
+    startBtn.style.pointerEvents = 'auto';
+  }
+};
+
+window.transferConvertedToEditor = function() {
+  if (!lastConvertedBlob) {
+    alert('لا يوجد فيديو طولي جاهز للنقل!');
+    return;
+  }
+
+  const verticalFile = new File([lastConvertedBlob], 'vertical_tiktok.mp4', { type: 'video/mp4' });
+
+  if (typeof handleAudioSelect === 'function') {
+    handleAudioSelect(verticalFile);
+  }
+
+  if (typeof switchUploadTab === 'function') {
+    switchUploadTab('local');
+  }
+
+  switchMainTab('editor');
+
+  const formElement = document.getElementById('form-controls');
+  if (formElement) {
+    formElement.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  alert('تم نقل الفيديو الطولي بنجاح إلى صانع الكابشن! اضغط الآن على "توليد الفيديو النهائي" لتفريغ المقطع وإضافة كابشن عليه 🚀');
+};
+
+
+let lastGeminiYtUrl = null;
+let lastGeminiTranscription = null;
+let lastGeminiAudioUrl = null;
+let currentYoutubeVideoTitle = '';
+
+window.startAudioDownloadOnly = async function() {
+  const urlInput = document.getElementById('gemini-yt-url');
+  const startBtn = document.getElementById('gemini-start-btn');
+  const loadingDiv = document.getElementById('gemini-loading');
+  const statusText = document.getElementById('gemini-status-text');
+  const progressBarFill = document.getElementById('gemini-progress-bar-fill');
+  const progressText = document.getElementById('gemini-progress-text');
+  
+  const placeholderText = document.getElementById('audio-placeholder-text');
+  const audioPlayer = document.getElementById('downloaded-audio-player');
+  const audioLink = document.getElementById('downloaded-audio-link');
+  const transcriptionContainer = document.getElementById('transcription-container');
+  const transcriptionText = document.getElementById('transcription-text');
+
+  if (!window.ensureUserAuthenticated()) {
+    return;
+  }
+
+  const youtubeUrl = urlInput.value.trim();
+
+  if (!youtubeUrl) {
+    alert('الرجاء إدخال رابط فيديو يوتيوب صالح!');
+    return;
+  }
+
+  // Check client-side cache first!
+  if (lastGeminiYtUrl === youtubeUrl && lastGeminiTranscription && lastGeminiAudioUrl) {
+    audioPlayer.src = lastGeminiAudioUrl;
+    audioPlayer.style.display = 'block';
+    audioLink.href = lastGeminiAudioUrl;
+    audioLink.style.display = 'flex';
+    placeholderText.style.display = 'none';
+    transcriptionContainer.style.display = 'flex';
+    transcriptionText.value = lastGeminiTranscription;
+    statusText.textContent = '✅ تم تحميل وتفريغ الصوت مسبقاً (من التخزين المؤقت)!';
+    return;
+  }
+
+  // Disable UI
+  startBtn.disabled = true;
+  startBtn.style.opacity = '0.5';
+  loadingDiv.classList.remove('hidden');
+
+  const geminiSpinner = loadingDiv.querySelector('.spinner');
+  if (geminiSpinner) geminiSpinner.style.display = 'block';
+  
+  // Hide previous player/link if any
+  audioPlayer.style.display = 'none';
+  audioPlayer.src = '';
+  audioLink.style.display = 'none';
+  placeholderText.style.display = 'block';
+  placeholderText.textContent = 'جاري التحميل ومعالجة الصوت...';
+  
+  // Reset suggested shorts UI
+  document.getElementById('suggested-shorts-container').style.display = 'none';
+  document.getElementById('shorts-cards-list').innerHTML = '';
+
+  // Reset Progress Bar
+  progressBarFill.style.width = '0%';
+  progressText.textContent = 'الخطوة 1 / 2: جاري بدء التحميل...';
+
+  // Start simulated progress
+  let currentProgress = 5;
+  progressBarFill.style.width = currentProgress + '%';
+
+  const updateProgress = (target, speed, message, stepLabel) => {
+    return setInterval(() => {
+      if (currentProgress < target) {
+        currentProgress += 1;
+        progressBarFill.style.width = currentProgress + '%';
+        progressText.textContent = `${stepLabel} (${currentProgress}%)`;
+        statusText.textContent = message;
+      }
+    }, speed);
+  };
+
+  // Get Groq & Gemini API Keys
+  const keyInput = document.getElementById('gemini-key-input');
+  const apiKeyVal = keyInput ? keyInput.value.trim() : "";
+  const groqApiKey = localStorage.getItem('groq_api_key') || apiKeyVal;
+  const geminiApiKey = localStorage.getItem('gemini_api_key') || apiKeyVal;
+
+  if (!apiKeyVal && !groqApiKey && !geminiApiKey) {
+    alert('الرجاء إدخال مفتاح المحرك السريع لتتمكن من تفريغ الصوت بسرعة فائقة!');
+    startBtn.disabled = false;
+    startBtn.style.opacity = '1';
+    loadingDiv.classList.add('hidden');
+    if (geminiSpinner) geminiSpinner.style.display = 'none';
+    return;
+  }
+
+  if (apiKeyVal.startsWith('gsk_')) {
+    localStorage.setItem('groq_api_key', apiKeyVal);
+  }
+
+  // Phase 1: Processing (from 5% to 95%)
+  let progressInterval = updateProgress(
+    95, 
+    500, 
+    'جاري تحميل الصوت وتفريغه بالذكاء الاصطناعي...',
+    'جاري المعالجة والتفريغ'
+  );
+
+  try {
+    const response = await fetch(audioApiUrl + '/api/transcribe-gemini', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        youtubeUrl: youtubeUrl,
+        groqApiKey: apiKeyVal.startsWith('gsk_') ? apiKeyVal : (groqApiKey || apiKeyVal),
+        geminiApiKey: geminiApiKey
+      })
+    });
+
+
+    clearInterval(progressInterval);
+
+    if (!response.ok) {
+      const errData = await response.json();
+      throw new Error(errData.detail || 'فشلت معالجة الطلب على السيرفر.');
+    }
+
+    const startData = await response.json();
+    const taskId = startData.taskId;
+
+    // Start polling the backend status every 3 seconds
+    let pollInterval = null;
+    const pollPromise = new Promise((resolve, reject) => {
+      pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`${audioApiUrl}/api/task-status/${taskId}`);
+          if (!statusRes.ok) {
+            clearInterval(pollInterval);
+            reject(new Error('فشل جلب حالة المهمة من السيرفر.'));
+            return;
+          }
+          const task = await statusRes.json();
+          if (task.status === 'success') {
+            clearInterval(pollInterval);
+            resolve(task);
+          } else if (task.status === 'failed') {
+            clearInterval(pollInterval);
+            reject(new Error(task.error || 'فشلت عملية التحميل والتفريغ.'));
+          } else {
+            // Update UI with real progress message from backend
+            statusText.textContent = task.progress || 'جاري المعالجة...';
+            
+            // Extract parts progress e.g. "معالجة الجزء 3/13"
+            if (task.progress.includes('معالجة') || task.progress.includes('الجزء')) {
+              const match = task.progress.match(/(\d+)\/(\d+)/);
+              if (match) {
+                const current = parseInt(match[1]);
+                const total = parseInt(match[2]);
+                const pct = 15 + Math.round((current / total) * 80);
+                progressBarFill.style.width = `${pct}%`;
+                progressText.textContent = `جاري التفريغ بالتوازي (${current}/${total})`;
+              }
+            } else if (task.progress.includes('تقسيم') || task.progress.includes('أجزاء')) {
+              progressBarFill.style.width = '12%';
+              progressText.textContent = task.progress;
+            } else if (task.progress.includes('تحميل')) {
+              progressBarFill.style.width = '7%';
+              progressText.textContent = 'جاري تحميل الصوت من يوتيوب...';
+            }
+          }
+        } catch (e) {
+          clearInterval(pollInterval);
+          reject(e);
+        }
+      }, 2000);
+    });
+
+    const resData = await pollPromise;
+    
+    // Complete
+    currentProgress = 100;
+    progressBarFill.style.width = '100%';
+    progressText.textContent = 'الخطوة 2 / 2: اكتمل بنجاح!';
+    statusText.textContent = '✅ تم تحميل وتفريغ الصوت بنجاح!';
+    if (geminiSpinner) geminiSpinner.style.display = 'none';
+    
+    // Display player
+    const fullAudioUrl = resData.audioUrl.startsWith('http') ? resData.audioUrl : (audioApiUrl + '/' + resData.audioUrl);
+    audioPlayer.src = fullAudioUrl;
+    audioPlayer.style.display = 'block';
+    audioLink.href = fullAudioUrl;
+    audioLink.style.display = 'flex';
+    placeholderText.style.display = 'none';
+
+    // Display transcription
+    if (resData.transcription) {
+      transcriptionContainer.style.display = 'flex';
+      transcriptionText.value = resData.transcription;
+
+      // Update Client Cache
+      lastGeminiYtUrl = youtubeUrl;
+      lastGeminiTranscription = resData.transcription;
+      lastGeminiAudioUrl = fullAudioUrl;
+      if (resData.videoTitle) {
+        currentYoutubeVideoTitle = resData.videoTitle;
+        window.currentYoutubeVideoTitle = resData.videoTitle;
+        try { localStorage.setItem('last_youtube_video_title', resData.videoTitle); } catch(_) {}
+      }
+    } else {
+      transcriptionContainer.style.display = 'none';
+    }
+  } catch (err) {
+    clearInterval(progressInterval);
+    progressBarFill.style.width = '0%';
+    progressText.textContent = '❌ فشلت العملية.';
+    alert('حدث خطأ: ' + err.message);
+    statusText.textContent = '❌ فشلت العملية.';
+    placeholderText.textContent = 'فشلت معالجة وتفريغ الصوت: ' + err.message;
+    if (geminiSpinner) geminiSpinner.style.display = 'none';
+  } finally {
+    startBtn.disabled = false;
+    startBtn.style.opacity = '1';
+  }
+};
+
+window.copyTranscription = function() {
+  const text = document.getElementById('transcription-text').value;
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    alert('تم نسخ النص المفرغ بنجاح إلى الحافظة! 📋');
+  }).catch(err => {
+    console.error('Failed to copy text: ', err);
+  });
+};
+
+window.fetchShortsSuggestions = async function() {
+  const transcriptionText = document.getElementById('transcription-text').value;
+  const geminiApiKey = document.getElementById('gemini-key-input').value.trim();
+  const shortsBtn = document.getElementById('gemini-shorts-btn');
+  const loadingDiv = document.getElementById('shorts-loading');
+  const statusSpan = document.getElementById('shorts-status-text') || (loadingDiv ? loadingDiv.querySelector('span') : null);
+  const timerSpan = document.getElementById('shorts-timer');
+  const container = document.getElementById('suggested-shorts-container');
+  const listContainer = document.getElementById('shorts-cards-list');
+  
+  const numShorts = parseInt(document.getElementById('gemini-shorts-count').value) || 3;
+  const openrouterModelInput = document.getElementById('openrouter-model-input');
+  const openrouterModel = openrouterModelInput ? openrouterModelInput.value.trim() : "google/gemini-3.7-flash";
+  const customPromptInput = document.getElementById('gemini-custom-prompt');
+  const customPrompt = customPromptInput ? customPromptInput.value.trim() : "";
+  const titleStyleSelect = document.getElementById('gemini-title-style');
+  const titleStyle = titleStyleSelect ? titleStyleSelect.value : "auto";
+  const ytUrl = document.getElementById('gemini-yt-url').value.trim();
+
+  if (!transcriptionText || transcriptionText.trim() === "") {
+    alert("لا يوجد نص مفرغ لتحليله واقتراح مقاطع Shorts منه!");
+    return;
+  }
+
+  if (!geminiApiKey) {
+    alert("الرجاء إدخال مفتاح Gemini API Key لتتمكن من تحليل النص!");
+    return;
+  }
+
+  // Show loading, disable button
+  shortsBtn.disabled = true;
+  shortsBtn.style.opacity = '0.5';
+  loadingDiv.classList.remove('hidden');
+  if (statusSpan) statusSpan.textContent = `جاري تحليل النص واستخراج ${numShorts} مقاطع Shorts بالذكاء الاصطناعي...`;
+  container.style.display = 'none';
+  listContainer.innerHTML = '';
+
+  let secondsElapsed = 0;
+  if (timerSpan) timerSpan.textContent = `⏱️ جارٍ التحليل والمعالجة (0 ثانية)...`;
+  const timerInterval = setInterval(() => {
+    secondsElapsed++;
+    if (timerSpan) {
+      if (secondsElapsed < 12) {
+        timerSpan.textContent = `⏱️ جارٍ التحليل واستخراج الأفكار (${secondsElapsed} ثانية)...`;
+      } else if (secondsElapsed < 25) {
+        timerSpan.textContent = `⏱️ جارٍ صياغة السكريبت والخطافات (${secondsElapsed} ثانية)...`;
+      } else {
+        timerSpan.textContent = `⏱️ جارٍ المزامنة وتنسيق التوقيتات (${secondsElapsed} ثانية)...`;
+      }
+    }
+  }, 1000);
+
+  try {
+    let shortsList = [];
+
+    // Try async endpoint first to bypass 30s HTTP timeouts
+    let asyncResponse;
+    try {
+      asyncResponse = await fetch(audioApiUrl + '/api/suggest-shorts-async', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcription: transcriptionText,
+          geminiApiKey: geminiApiKey,
+          openrouterModel: openrouterModel,
+          customPrompt: customPrompt,
+          titleStyle: titleStyle,
+          numShorts: numShorts
+        })
+      });
+    } catch (e) {
+      console.warn('Async suggest-shorts failed, falling back to sync:', e);
+    }
+
+    if (asyncResponse && asyncResponse.ok) {
+      const startData = await asyncResponse.json();
+      const taskId = startData.taskId;
+
+      let pollInterval = null;
+      const pollPromise = new Promise((resolve, reject) => {
+        pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await fetch(`${audioApiUrl}/api/task-status/${taskId}`);
+            if (!statusRes.ok) {
+              clearInterval(pollInterval);
+              reject(new Error('فشل جلب حالة اقتراح المقاطع من السيرفر.'));
+              return;
+            }
+            const task = await statusRes.json();
+            if (task.status === 'success') {
+              clearInterval(pollInterval);
+              resolve(task);
+            } else if (task.status === 'failed') {
+              clearInterval(pollInterval);
+              reject(new Error(task.error || 'فشلت عملية اقتراح المقاطع.'));
+            } else {
+              if (statusSpan && task.progress) {
+                statusSpan.textContent = task.progress;
+              }
+            }
+          } catch (e) {
+            clearInterval(pollInterval);
+            reject(e);
+          }
+        }, 2000);
+      });
+
+      const resData = await pollPromise;
+      shortsList = resData.shorts || [];
+    } else {
+      // Fallback to sync endpoint
+      const response = await fetch(audioApiUrl + '/api/suggest-shorts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcription: transcriptionText,
+          geminiApiKey: geminiApiKey,
+          openrouterModel: openrouterModel,
+          customPrompt: customPrompt,
+          titleStyle: titleStyle,
+          numShorts: numShorts
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({ detail: 'حدث خطأ في السيرفر أثناء تحليل الـ Shorts' }));
+        throw new Error(errData.detail || 'فشلت معالجة الطلب على السيرفر.');
+      }
+
+      const resData = await response.json();
+      shortsList = resData.shorts || [];
+    }
+
+    clearInterval(timerInterval);
+
+    currentSuggestedShorts = shortsList || [];
+    selectedShortsIndices.clear();
+    const selectAllChk = document.getElementById('select-all-shorts-chk');
+    if (selectAllChk) selectAllChk.checked = false;
+    updateBatchToolbar();
+
+    if (shortsList && shortsList.length > 0) {
+      let cardsHtml = '';
+      const escapedYtUrl = ytUrl.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"');
+      
+      shortsList.forEach((short, idx) => {
+        const smartCapObj = (typeof generateSmartCaptionAndHashtags === 'function')
+          ? generateSmartCaptionAndHashtags(short.title, short.script)
+          : { caption: short.title, hashtags: ['#fyp', '#viral', '#shorts', '#tiktok'] };
+        const tiktokPostCaption = smartCapObj.caption;
+        const escapedTiktokCaption = tiktokPostCaption.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
+
+        const copyText = `عنوان المقطع: ${short.title}\nالتوقيت: [${short.start_time} -> ${short.end_time}]\nالخطاف: ${short.hook}\n\n📱 كابشن التيك توك المقترح:\n${tiktokPostCaption}\n\n📝 السكريبت:\n${short.script}`;
+        const escapedCopyText = copyText.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/\n/g, '\\n');
+        
+        cardsHtml += `
+          <div class="short-card" style="
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid rgba(139, 92, 246, 0.25);
+            border-radius: 16px;
+            padding: 20px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+          ">
+            <!-- Badge: Short Number -->
+            <div style="
+              position: absolute;
+              top: -10px;
+              right: 20px;
+              background: linear-gradient(135deg, #8b5cf6, #ec4899);
+              color: #fff;
+              font-size: 11px;
+              font-weight: 800;
+              padding: 4px 12px;
+              border-radius: 20px;
+              box-shadow: 0 4px 10px rgba(139, 92, 246, 0.3);
+            ">
+              مقطع مقترح #${idx + 1}
+            </div>
+
+            <!-- Badge: Select Checkbox -->
+            <label style="position: absolute; top: -10px; left: 15px; display: flex; align-items: center; gap: 6px; background: rgba(16, 185, 129, 0.15); border: 1px solid #10b981; color: #fff; font-size: 11px; font-weight: 800; padding: 3px 10px; border-radius: 20px; cursor: pointer; user-select: none;">
+              <input type="checkbox" class="short-card-chk" data-index="${idx}" onchange="toggleShortSelection(${idx}, this.checked)" style="width: 14px; height: 14px; accent-color: #10b981; cursor: pointer;" />
+              <span>تحديد</span>
+            </label>
+
+            <!-- Category & Time Row -->
+            <div style="
+              display: flex;
+              align-items: center;
+              justify-content: space-between;
+              flex-wrap: wrap;
+              gap: 8px;
+              margin-top: 5px;
+            ">
+              <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="
+                  background: rgba(168, 85, 247, 0.15);
+                  border: 1px solid rgba(168, 85, 247, 0.4);
+                  padding: 3px 8px;
+                  border-radius: 6px;
+                  font-size: 11px;
+                  font-weight: 700;
+                  color: #c084fc;
+                ">
+                  ${short.category || '🎯 قصة وخلاصة مكتملة'}
+                </span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700; color: var(--purple-accent);">
+                <span>⏱️ التوقيت:</span>
+                <span style="
+                  background: rgba(139, 92, 246, 0.15);
+                  border: 1px solid rgba(139, 92, 246, 0.4);
+                  padding: 3px 10px;
+                  border-radius: 6px;
+                  font-family: monospace;
+                  font-size: 13px;
+                  direction: ltr;
+                  display: inline-block;
+                  color: #c084fc;
+                  font-weight: 700;
+                ">
+                  ${short.start_time} ➔ ${short.end_time}
+                </span>
+              </div>
+            </div>
+
+            <!-- Title -->
+            <h4 style="
+              margin: 5px 0 2px 0;
+              font-size: 14px;
+              font-weight: 800;
+              color: #fff;
+            ">
+              🎥 العنوان المقترح: ${short.title}
+            </h4>
+
+            <!-- Hook -->
+            <div style="
+              background: rgba(236, 72, 153, 0.05);
+              border-right: 3px solid #ec4899;
+              padding: 8px 12px;
+              border-radius: 0 8px 8px 0;
+              font-size: 13px;
+              color: #f472b6;
+              line-height: 1.5;
+            ">
+              <span style="font-weight: 800;">⚡ الخطاف (أول 3 ثوانٍ):</span> ${short.hook}
+            </div>
+
+            <!-- Script Text -->
+            <div style="display: flex; flex-direction: column; gap: 5px; margin-top: 5px;">
+              <span style="font-size: 12px; color: var(--text-muted); font-weight: 600;">📝 سكريبت المقطع القصير:</span>
+              <textarea readonly style="
+                width: 100%;
+                height: 80px;
+                padding: 10px;
+                border-radius: 8px;
+                border: 1px solid rgba(255,255,255,0.08);
+                background: rgba(0,0,0,0.2);
+                color: #fff;
+                font-size: 13px;
+                line-height: 1.6;
+                resize: none;
+                font-family: inherit;
+              ">${short.script}</textarea>
+            </div>
+
+            <!-- Ready TikTok Caption Box -->
+            <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 6px;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 11px; color: #c084fc; font-weight: 700;">📱 كابشن تيك توك المقترح للنشر (العنوان + حقوق الحلقة + الهاشتاجات):</span>
+                <button type="button" onclick="copyTiktokCaption('${escapedTiktokCaption}', ${idx + 1})" style="background: rgba(168,85,247,0.2); border: 1px solid #8b5cf6; border-radius: 6px; padding: 2px 8px; color: #fff; font-size: 11px; cursor: pointer; font-weight: 700;">نسخ الكابشن 📋</button>
+              </div>
+              <div style="
+                padding: 8px 10px;
+                border-radius: 8px;
+                border: 1px solid rgba(139,92,246,0.3);
+                background: rgba(0,0,0,0.35);
+                color: #e2e8f0;
+                font-size: 12px;
+                line-height: 1.5;
+                white-space: pre-wrap;
+              ">${tiktokPostCaption}</div>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+              <!-- Send to Captions Phase Button (Full Width Primary) -->
+              <button type="button" onclick="cutAndSendToCaptions('${escapedYtUrl}', '${short.start_time}', '${short.end_time}', ${idx}, this)" class="btn-primary" style="
+                width: 100%;
+                padding: 10px 14px;
+                font-size: 13px;
+                font-weight: 800;
+                justify-content: center;
+                border-radius: 10px;
+                background: linear-gradient(135deg, #8b5cf6, #ec4899);
+                border: none;
+                color: #fff;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                box-shadow: 0 4px 14px rgba(139, 92, 246, 0.35);
+                margin: 0;
+              ">
+                <span>🎬</span> قص وتوليد الكابشن
+              </button>
+
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                <!-- Cut & Download Button -->
+                <button type="button" onclick="cutVideoSegment('${escapedYtUrl}', '${short.start_time}', '${short.end_time}', ${idx + 1}, this)" class="btn-primary" style="
+                  padding: 8px 10px;
+                  font-size: 12px;
+                  font-weight: 700;
+                  justify-content: center;
+                  border-radius: 8px;
+                  background: linear-gradient(135deg, #10b981, #059669);
+                  border: none;
+                  color: #fff;
+                  cursor: pointer;
+                  display: flex;
+                  align-items: center;
+                  gap: 4px;
+                  margin: 0;
+                ">
+                  <span>✂️</span> قص وتحميل الفيديو
+                </button>
+
+                <!-- Copy Button for Script -->
+                <button type="button" onclick="copyShortsText('${escapedCopyText}', ${idx + 1})" class="btn-secondary" style="
+                  padding: 8px 10px;
+                  font-size: 12px;
+                  font-weight: 700;
+                  justify-content: center;
+                  border-radius: 8px;
+                  margin: 0;
+                  display: flex;
+                  align-items: center;
+                  gap: 4px;
+                ">
+                  <span>📋</span> نسخ التفاصيل
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+      });
+      listContainer.innerHTML = cardsHtml;
+      container.style.display = 'flex';
+    } else {
+      throw new Error('الاستجابة لا تحتوي على مقاطع مقترحة.');
+    }
+  } catch (err) {
+    console.error(err);
+    alert('حدث خطأ أثناء اقتراح مقاطع الـ Shorts: ' + err.message);
+  } finally {
+    shortsBtn.disabled = false;
+    shortsBtn.style.opacity = '1';
+    loadingDiv.classList.add('hidden');
+  }
+};
+
+function safeCopyToClipboard(text, successMsg) {
+  const nav = (typeof window !== 'undefined' && window.navigator) ? window.navigator : (typeof navigator !== 'undefined' ? navigator : null);
+  if (nav && nav.clipboard && typeof nav.clipboard.writeText === 'function') {
+    nav.clipboard.writeText(text).then(() => {
+      alert(successMsg);
+    }).catch(() => fallbackCopy(text, successMsg));
+  } else {
+    fallbackCopy(text, successMsg);
+  }
+}
+
+function fallbackCopy(text, successMsg) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    alert(successMsg);
+  } catch (e) {
+    alert('تعذر النسخ التلقائي، يرجى تحديد النص ونسخه يدوياً');
+  }
+}
+
+window.copyShortsText = function(text, index) {
+  safeCopyToClipboard(text, 'تم نسخ تفاصيل المقطع المقترح #' + index + ' بنجاح! 📋');
+};
+
+window.copyTiktokCaption = function(text, index) {
+  safeCopyToClipboard(text, 'تم نسخ كابشن تيك توك للمقطع #' + index + ' بنجاح! 🚀\n(يتضمن: العنوان + سطر حقوق الحلقة + الهاشتاجات جاهزة للصق في TikTok)');
+};
+
+window.copyFinalTikTokCaption = function() {
+  const finalCaptionEl = document.getElementById('final-tiktok-caption-text');
+  if (finalCaptionEl && finalCaptionEl.value) {
+    safeCopyToClipboard(finalCaptionEl.value, 'تم نسخ كابشن تيك توك بنجاح! 🚀\n(جاهز للنشر على TikTok مع العنوان وحقوق الحلقة والهاشتاجات)');
+  }
+};
+
+async function performAsyncCut(youtubeUrl, startTime, endTime, quality, onProgress) {
+  let response;
+  try {
+    response = await fetch(audioApiUrl + '/api/cut-async', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: youtubeUrl,
+        start_time: startTime,
+        end_time: endTime,
+        quality: quality || 1080
+      })
+    });
+  } catch (netErr) {
+    console.warn('cut-async network error, fallback to sync cut:', netErr);
+  }
+  if (response && response.ok) {
+    const startData = await response.json();
+    const taskId = startData.taskId;
+
+    let pollInterval = null;
+    let consecutivePollErrors = 0;
+    const pollPromise = new Promise((resolve, reject) => {
+      pollInterval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`${audioApiUrl}/api/task-status/${taskId}`);
+          if (!statusRes.ok) {
+            consecutivePollErrors++;
+            if (consecutivePollErrors > 15) {
+              clearInterval(pollInterval);
+              reject(new Error('فشل جلب حالة القص من السيرفر.'));
+            }
+            return;
+          }
+          const task = await statusRes.json();
+          consecutivePollErrors = 0;
+          if (task.status === 'success') {
+            clearInterval(pollInterval);
+            resolve(task);
+          } else if (task.status === 'failed') {
+            clearInterval(pollInterval);
+            reject(new Error(task.error || 'فشلت عملية قص المقطع.'));
+          } else {
+            if (typeof onProgress === 'function' && task.progress) {
+              onProgress(task.progress);
+            }
+          }
+        } catch (e) {
+          consecutivePollErrors++;
+          console.warn(`[Cut Poll] Network glitch (${consecutivePollErrors}/15):`, e.message);
+          if (consecutivePollErrors > 15) {
+            clearInterval(pollInterval);
+            reject(e);
+          }
+        }
+      }, 2000);
+    });
+
+    const resData = await pollPromise;
+    const videoUrl = resData.videoUrl.startsWith('http') ? resData.videoUrl : (audioApiUrl + '/' + resData.videoUrl);
+    return await downloadVideoBlobWithRetry(videoUrl);
+  } else {
+    // Fallback sync /api/cut
+    const syncRes = await fetch(audioApiUrl + '/api/cut', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: youtubeUrl,
+        start_time: startTime,
+        end_time: endTime,
+        quality: quality || 720
+      })
+    });
+
+    if (!syncRes.ok) {
+      const errData = await syncRes.json().catch(() => ({ detail: 'فشل السيرفر في قص المقطع. قد يكون رابط اليوتيوب محمي أو التوقيتات خارج المدى.' }));
+      throw new Error(errData.detail || 'فشلت معالجة الطلب على السيرفر.');
+    }
+    return await syncRes.blob();
+  }
+}
+
+let selectedShortChoice = 'vertical';
+let rememberedShortChoice = null;
+let pendingShortArgs = null;
+let pendingBatchProcess = false;
+let pendingBatchArgs = null;
+
+window.selectShortOption = function(choice) {
+  selectedShortChoice = choice;
+  const vertCard = document.getElementById('option-card-vertical');
+  const origCard = document.getElementById('option-card-original');
+
+  if (choice === 'vertical') {
+    if (vertCard) {
+      vertCard.style.background = 'rgba(139, 92, 246, 0.12)';
+      vertCard.style.border = '2px solid var(--purple-accent)';
+    }
+    if (origCard) {
+      origCard.style.background = 'rgba(255, 255, 255, 0.02)';
+      origCard.style.border = '1px solid rgba(255, 255, 255, 0.12)';
+    }
+  } else {
+    if (origCard) {
+      origCard.style.background = 'rgba(139, 92, 246, 0.12)';
+      origCard.style.border = '2px solid var(--purple-accent)';
+    }
+    if (vertCard) {
+      vertCard.style.background = 'rgba(255, 255, 255, 0.02)';
+      vertCard.style.border = '1px solid rgba(255, 255, 255, 0.12)';
+    }
+  }
+};
+
+window.toggleModalEngineFields = function() {
+  const select = document.getElementById('modal-caption-engine-select');
+  const elevenlabsWrapper = document.getElementById('modal-elevenlabs-key-wrapper');
+  if (select && elevenlabsWrapper) {
+    if (select.value === 'v2') {
+      elevenlabsWrapper.style.display = 'block';
+    } else {
+      elevenlabsWrapper.style.display = 'none';
+    }
+  }
+};
+
+window.closeShortOptionsModal = function() {
+  const modal = document.getElementById('short-options-modal');
+  if (modal) modal.style.display = 'none';
+  pendingShortArgs = null;
+  pendingBatchProcess = false;
+  pendingBatchArgs = null;
+};
+
+// تملأ قائمة القوالب جوّه الـ modal
+window.populateModalTemplates = function() {
+  const listEl   = document.getElementById('modal-template-list');
+  const emptyEl  = document.getElementById('modal-template-empty');
+  const nameEl   = document.getElementById('modal-selected-template-name');
+  if (!listEl) return;
+
+  const templates = typeof getTemplates === 'function' ? getTemplates() : [];
+
+  // احذف كل شيء عدا الـ emptyEl
+  Array.from(listEl.children).forEach(c => { if (c !== emptyEl) c.remove(); });
+  if (nameEl) nameEl.textContent = 'الإعدادات الحالية';
+
+  if (templates.length === 0) {
+    if (emptyEl) emptyEl.style.display = 'block';
+    return;
+  }
+  if (emptyEl) emptyEl.style.display = 'none';
+
+  // بطاقة "بدون قالب"
+  const noneBtn = document.createElement('button');
+  noneBtn.type = 'button';
+  noneBtn.dataset.tid = 'none';
+  noneBtn.style.cssText = 'width:100%;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.05);border:2px solid rgba(255,255,255,0.2);border-radius:10px;padding:9px 12px;cursor:pointer;color:#fff;font-family:inherit;text-align:right;transition:all 0.15s;';
+  noneBtn.innerHTML = `<span style="font-size:16px">⚙️</span><span style="font-size:12px;font-weight:700">بدون قالب (الإعدادات الحالية)</span>`;
+  noneBtn.onclick = () => selectModalTemplate(null, noneBtn, 'الإعدادات الحالية');
+  listEl.appendChild(noneBtn);
+
+  templates.forEach(t => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.dataset.tid = String(t.id);
+    btn.style.cssText = 'width:100%;display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.03);border:1px solid rgba(139,92,246,0.25);border-radius:10px;padding:9px 12px;cursor:pointer;color:#fff;font-family:inherit;text-align:right;transition:all 0.15s;';
+    btn.innerHTML = `
+      <div style="display:flex;gap:3px;flex-shrink:0;">
+        <div style="width:12px;height:12px;border-radius:50%;background:${t.settings.activeColor||'#fff'};border:1px solid rgba(255,255,255,0.3);"></div>
+        <div style="width:12px;height:12px;border-radius:50%;background:${t.settings.bgColor||'#000'};border:1px solid rgba(255,255,255,0.3);"></div>
+        <div style="width:12px;height:12px;border-radius:50%;background:${t.settings.titleBgColor||'#000'};border:1px solid rgba(255,255,255,0.3);"></div>
+      </div>
+      <span style="font-size:12px;font-weight:700;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${t.name}</span>
+      <span style="font-size:10px;color:rgba(255,255,255,0.4);flex-shrink:0;">${t.settings.animationType||'classic'}</span>`;
+    btn.onclick = () => selectModalTemplate(t, btn, t.name);
+    listEl.appendChild(btn);
+  });
+};
+
+window.selectModalTemplate = function(template, btnEl, label) {
+  // إزالة التحديد من كل البطاقات
+  const listEl = document.getElementById('modal-template-list');
+  if (listEl) Array.from(listEl.querySelectorAll('button')).forEach(b => {
+    b.style.border = b.dataset.tid === 'none' ? '2px solid rgba(255,255,255,0.2)' : '1px solid rgba(139,92,246,0.25)';
+    b.style.background = 'rgba(255,255,255,0.03)';
+  });
+  if (btnEl) { btnEl.style.border = '2px solid #8b5cf6'; btnEl.style.background = 'rgba(139,92,246,0.15)'; }
+  const nameEl = document.getElementById('modal-selected-template-name');
+  if (nameEl) nameEl.textContent = label;
+
+  // طبّق القالب فوراً لو اختاره
+  if (template && typeof applySettingsToDOM === 'function') applySettingsToDOM(template.settings);
+};
+
+
+window.confirmShortOptionChoice = function() {
+  const rememberCheckbox = document.getElementById('remember-short-option');
+  if (rememberCheckbox && rememberCheckbox.checked) {
+    rememberedShortChoice = selectedShortChoice;
+  }
+
+  // Sync engine and ElevenLabs key selection from modal to main inputs & localStorage
+  const modalSelect = document.getElementById('modal-caption-engine-select');
+  const modalElInput = document.getElementById('modal-elevenlabs-key-input');
+  
+  const selectedEngine = modalSelect ? modalSelect.value : 'v1';
+  localStorage.setItem('caption_engine', selectedEngine);
+  
+  const engineSelect = document.getElementById('caption-engine-select');
+  if (engineSelect) {
+    engineSelect.value = selectedEngine;
+    if (typeof window.toggleEngineFields === 'function') window.toggleEngineFields();
+  }
+  
+  const elKeyVal = modalElInput ? modalElInput.value.trim() : '';
+  if (elKeyVal) {
+    localStorage.setItem('elevenlabs_api_key', elKeyVal);
+    const elInput = document.getElementById('elevenlabs-api-key-input');
+    if (elInput) elInput.value = elKeyVal;
+  }
+  
+  // Capture values before closing/clearing variables
+  const isBatch = pendingBatchProcess;
+  const batchArgs = pendingBatchArgs;
+  const singleArgs = pendingShortArgs;
+
+  closeShortOptionsModal();
+
+  if (isBatch) {
+    if (batchArgs) {
+      executeBatchCaptionProcess(batchArgs.youtubeUrl, selectedShortChoice);
+    }
+  } else {
+    if (singleArgs) {
+      executeCutAndSendToCaptions(singleArgs.youtubeUrl, singleArgs.startTime, singleArgs.endTime, singleArgs.idx, singleArgs.btn, selectedShortChoice);
+    }
+  }
+};
+
+window.cutAndSendToCaptions = function(youtubeUrl, startTime, endTime, idx, btn) {
+  if (!youtubeUrl) {
+    alert("رابط اليوتيوب غير متوفر لقص المقطع!");
+    return;
+  }
+
+  // Ensure idx is valid 0-based index
+  const arrayIdx = (typeof idx === 'number' && idx >= 0 && idx < currentSuggestedShorts.length) ? idx : 0;
+
+  if (rememberedShortChoice) {
+    executeCutAndSendToCaptions(youtubeUrl, startTime, endTime, arrayIdx, btn, rememberedShortChoice);
+    return;
+  }
+
+  pendingShortArgs = { youtubeUrl, startTime, endTime, idx: arrayIdx, btn };
+  pendingBatchProcess = false;
+  pendingBatchArgs = null;
+
+  // Prefill title input with THIS short's exact title and toggle title ON
+  const shortItem = currentSuggestedShorts[arrayIdx];
+  const suggestedTitle = shortItem ? cleanClipTitle(shortItem.title) : '';
+  const titleTextInput = document.getElementById('title-text-input');
+  if (titleTextInput) {
+    titleTextInput.value = suggestedTitle;
+  }
+  const titleSubtextInput = document.getElementById('title-subtext-input');
+  if (titleSubtextInput) {
+    titleSubtextInput.value = '';
+  }
+  const titleStyleSelect = document.getElementById('title-style-select');
+  if (titleStyleSelect && (!titleStyleSelect.value || titleStyleSelect.value === 'tiktok-pill')) {
+    titleStyleSelect.value = 'split-contrast';
+  }
+  const showTitleToggle = document.getElementById('show-title-toggle');
+  if (showTitleToggle) {
+    showTitleToggle.checked = true;
+    if (typeof window.toggleTitleFields === 'function') {
+      window.toggleTitleFields(true);
+    }
+  }
+
+  // Set up modal inputs to reflect current settings
+  const modalSelect = document.getElementById('modal-caption-engine-select');
+  const modalElInput = document.getElementById('modal-elevenlabs-key-input');
+  
+  const currentEngine = localStorage.getItem('caption_engine') || 'v1';
+  const currentElKey = localStorage.getItem('elevenlabs_api_key') || '';
+  
+  if (modalSelect) modalSelect.value = currentEngine;
+  if (modalElInput) modalElInput.value = currentElKey;
+
+  selectShortOption('vertical');
+
+  if (typeof window.toggleModalEngineFields === 'function') {
+    window.toggleModalEngineFields();
+  }
+
+  if (typeof window.populateModalTemplates === 'function') window.populateModalTemplates();
+  const modal = document.getElementById('short-options-modal');
+  if (modal) modal.style.display = 'flex';
+};
+
+
+async function executeCutAndSendToCaptions(youtubeUrl, startTime, endTime, idx, btn, convertChoice) {
+  if (!window.ensureUserAuthenticated()) {
+    return;
+  }
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+  btn.style.pointerEvents = 'none';
+  btn.innerHTML = '<span>⏳</span> جاري قص المقطع...';
+
+  const effectiveYtUrl = youtubeUrl || document.getElementById('gemini-yt-url')?.value?.trim() || '';
+  if (!effectiveYtUrl) {
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.style.pointerEvents = 'auto';
+    btn.innerHTML = originalHtml;
+    alert('رابط اليوتيوب غير متوفر لقص المقطع!');
+    return;
+  }
+
+  try {
+    // Step 1: Perform Async Cut from YouTube
+    let blob = await performAsyncCut(effectiveYtUrl, startTime, endTime, 1080, (progText) => {
+      btn.innerHTML = `<span>⏳</span> ${progText}`;
+    });
+
+    // Step 2: If user chose 'vertical', pass cut clip blob through KIM algorithm (/api/convert-vertical-async)
+    if (convertChoice === 'vertical') {
+      btn.innerHTML = '<span>📱</span> جاري تحويل المقطع إلى طولي (9:16)...';
+      
+      const rawCutFile = new File([blob], `cut_clip_${idx}.mp4`, { type: 'video/mp4' });
+      const fd = new FormData();
+      fd.append('file', rawCutFile);
+
+      const convertRes = await fetch(audioApiUrl + '/api/convert-vertical-async', {
+        method: 'POST',
+        body: fd
+      });
+
+      if (!convertRes.ok) {
+        const errData = await convertRes.json().catch(() => ({ detail: 'فشل بدء معالجة تحويل المقطع إلى طولي.' }));
+        throw new Error(errData.detail || 'فشلت معالجة التحويل على السيرفر.');
+      }
+
+      const startData = await convertRes.json();
+      const taskId = startData.taskId;
+
+      let pollInterval = null;
+      const convertTask = await new Promise((resolve, reject) => {
+        pollInterval = setInterval(async () => {
+          try {
+            const statusRes = await fetch(`${audioApiUrl}/api/task-status/${taskId}`);
+            if (!statusRes.ok) {
+              clearInterval(pollInterval);
+              reject(new Error('فشل متابعة حالة التحويل من السيرفر.'));
+              return;
+            }
+            const t = await statusRes.json();
+            if (t.status === 'success') {
+              clearInterval(pollInterval);
+              resolve(t);
+            } else if (t.status === 'failed') {
+              clearInterval(pollInterval);
+              reject(new Error(t.error || 'فشلت عملية تحويل المقطع إلى طولي.'));
+            } else {
+              if (t.progress) {
+                btn.innerHTML = `<span>📱</span> ${t.progress}`;
+              }
+            }
+          } catch (e) {
+            clearInterval(pollInterval);
+            reject(e);
+          }
+        }, 2000);
+      });
+
+      const verticalVideoUrl = convertTask.videoUrl.startsWith('http') ? convertTask.videoUrl : (audioApiUrl + '/' + convertTask.videoUrl);
+      const verticalRes = await fetch(verticalVideoUrl);
+      if (!verticalRes.ok) {
+        throw new Error('فشل جلب ملف المقطع الطولي من السيرفر.');
+      }
+
+      blob = await verticalRes.blob();
+    }
+
+    btn.innerHTML = '<span>🚀</span> جاري فتح المحرر...';
+    const finalFile = new File([blob], `short_clip_${idx}_${convertChoice}.mp4`, { type: 'video/mp4' });
+
+    // Set cut/converted video file as active in dropzone
+    handleAudioSelect(finalFile);
+
+    // Switch upload tab if tab elements exist
+    switchUploadTab('local');
+
+    // Switch main tab to Video Creator / Editor
+    switchMainTab('editor');
+
+    // Make sure upload-state is visible
+    if (typeof showState === 'function' && uploadState) {
+      showState(uploadState);
+    }
+
+    // Scroll to top of form
+    const formElement = document.getElementById('form-controls');
+    if (formElement) {
+      formElement.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    // Ensure title input has THIS exact short's title before submitting
+    const arrayIdx = (typeof idx === 'number' && idx >= 0 && idx < currentSuggestedShorts.length) ? idx : 0;
+    const currentShort = currentSuggestedShorts[arrayIdx];
+    if (currentShort && currentShort.title) {
+      const titleTextInput = document.getElementById('title-text-input');
+      if (titleTextInput) titleTextInput.value = cleanClipTitle(currentShort.title);
+      const titleSubtextInput = document.getElementById('title-subtext-input');
+      if (titleSubtextInput) titleSubtextInput.value = '';
+      const titleStyleSelect = document.getElementById('title-style-select');
+      if (titleStyleSelect && (!titleStyleSelect.value || titleStyleSelect.value === 'tiktok-pill')) {
+        titleStyleSelect.value = 'split-contrast';
+      }
+    }
+
+    // Enable submitBtn explicitly and trigger form submission
+    const submitBtn = document.getElementById('submit-btn');
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.click();
+    }
+
+  } catch (err) {
+    console.error(err);
+    alert('حدث خطأ أثناء معالجة ونقل المقطع لمرحلة الكابشن: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.style.pointerEvents = 'auto';
+    btn.innerHTML = originalHtml;
+  }
+};
+
+window.processBatchCaption = async function() {
+  if (selectedShortsIndices.size === 0) {
+    alert('يرجى تحديد مقطع واحد على الأقل من كروت الـ Shorts بالضغط على زر "تحديد" أعلى المقطع!');
+    return;
+  }
+
+  const indices = Array.from(selectedShortsIndices).sort((a, b) => a - b);
+  const ytUrl = document.getElementById('gemini-yt-url').value.trim();
+
+  if (!ytUrl) {
+    alert('رابط اليوتيوب غير متوفر لقص المقاطع المحددة!');
+    return;
+  }
+
+  const confirmMsg = `هل تريد بدء قص وتوليد الكابشن آلياً لعدد ${indices.length} مقطع مُحدد؟\nسيتم حفض المخرجات تلقائياً في "أرشيف الفيديوهات (48h)".`;
+  if (!confirm(confirmMsg)) return;
+
+  const batchBtn = document.getElementById('batch-caption-btn');
+  const originalBtnHtml = batchBtn ? batchBtn.innerHTML : '';
+  if (!window.ensureUserAuthenticated()) {
+    return;
+  }
+  if (batchBtn) {
+    batchBtn.disabled = true;
+    batchBtn.style.opacity = '0.6';
+  }
+
+  let successCount = 0;
+  for (let i = 0; i < indices.length; i++) {
+    const sIdx = indices[i];
+    const short = currentSuggestedShorts[sIdx];
+    if (!short) continue;
+
+    if (batchBtn) {
+      batchBtn.innerHTML = `<span>⏳</span> جاري معالجة المقطع ${i + 1} من ${indices.length}: [${short.title.substring(0, 15)}...]`;
+    }
+
+    try {
+      // 1. Cut audio/video segment
+      let blob = await performAsyncCut(ytUrl, short.start_time, short.end_time, 1080);
+
+      // 2. Convert to vertical (9:16)
+      if (batchBtn) {
+        batchBtn.innerHTML = `<span>📱</span> جاري تحويل المقطع ${i + 1} من ${indices.length} لطولي (9:16)...`;
+      }
+      const rawCutFile = new File([blob], `cut_clip_${sIdx}.mp4`, { type: 'video/mp4' });
+      const convertFd = new FormData();
+      convertFd.append('file', rawCutFile);
+
+      const convertRes = await fetch(audioApiUrl + '/api/convert-vertical-async', {
+        method: 'POST',
+        body: convertFd
+      });
+
+      if (convertRes.ok) {
+        const startData = await convertRes.json();
+        const convertTaskId = startData.taskId;
+
+        let convertPollInterval = null;
+        let convConsecutiveErrors = 0;
+        const convertTaskData = await new Promise((resolve, reject) => {
+          convertPollInterval = setInterval(async () => {
+            try {
+              const statusRes = await fetch(`${audioApiUrl}/api/task-status/${convertTaskId}`);
+              if (!statusRes.ok) {
+                convConsecutiveErrors++;
+                if (convConsecutiveErrors > 15) {
+                  clearInterval(convertPollInterval);
+                  reject(new Error('فشل جلب حالة التحويل لطولي.'));
+                }
+                return;
+              }
+              const t = await statusRes.json();
+              convConsecutiveErrors = 0;
+              if (t.status === 'success') {
+                clearInterval(convertPollInterval);
+                resolve(t);
+              } else if (t.status === 'failed') {
+                clearInterval(convertPollInterval);
+                reject(new Error(t.error || 'فشل التحويل لطولي.'));
+              }
+            } catch (e) {
+              convConsecutiveErrors++;
+              if (convConsecutiveErrors > 15) {
+                clearInterval(convertPollInterval);
+                reject(e);
+              }
+            }
+          }, 2000);
+        });
+
+        const verticalVideoUrl = convertTaskData.videoUrl.startsWith('http') ? convertTaskData.videoUrl : (audioApiUrl + '/' + convertTaskData.videoUrl);
+        blob = await downloadVideoBlobWithRetry(verticalVideoUrl);
+      }
+
+      const audioFile = new File([blob], `batch_clip_${sIdx + 1}.mp4`, { type: 'video/mp4' });
+
+      // 3. Transcribe & weld via MAIN backend (apiUrl, not audioApiUrl)
+      if (batchBtn) {
+        batchBtn.innerHTML = `<span>🎤</span> جاري تفريغ المقطع ${i + 1} من ${indices.length} بالـ AI...`;
+      }
+      const fd = new FormData();
+      fd.append('audio', audioFile);
+      fd.append('minWords', document.getElementById('min-words') ? document.getElementById('min-words').value : '2');
+      fd.append('maxWords', document.getElementById('max-words') ? document.getElementById('max-words').value : '5');
+      fd.append('animation', selectedAnimation || 'classic');
+      fd.append('activeColor', document.getElementById('active-color') ? document.getElementById('active-color').value : '#FFFFFF');
+      fd.append('inactiveColor', document.getElementById('inactive-color') ? document.getElementById('inactive-color').value : '#FFFFFF');
+
+      fd.append('showTitle', 'true');
+      if (short.title) fd.append('titleText', cleanClipTitle(short.title));
+      fd.append('titleSubtext', '');
+      fd.append('titleColor', document.getElementById('title-color-input') ? document.getElementById('title-color-input').value : '#FFFFFF');
+      fd.append('titleBgColor', document.getElementById('title-bg-color-input') ? document.getElementById('title-bg-color-input').value : '#000000');
+      fd.append('titleDuration', document.getElementById('title-duration-input') ? document.getElementById('title-duration-input').value : '6.5');
+      fd.append('titleTop', document.getElementById('title-top-input') ? document.getElementById('title-top-input').value : '14.0');
+      fd.append('titleStyle', (document.getElementById('title-style-select') && document.getElementById('title-style-select').value) ? document.getElementById('title-style-select').value : 'split-contrast');
+      
+      const groqKey = localStorage.getItem('groq_api_key') || '';
+      const geminiKey = localStorage.getItem('gemini_api_key') || localStorage.getItem('geminiApiKey') || '';
+      if (groqKey) fd.append('groqApiKey', groqKey);
+      if (geminiKey) fd.append('geminiApiKey', geminiKey);
+
+      const engineSelect = document.getElementById('caption-engine-select');
+      const engineVal = engineSelect ? engineSelect.value : 'v1';
+      fd.append('captionEngine', engineVal);
+
+      const elKey = localStorage.getItem('elevenlabs_api_key') || '';
+      if (elKey) fd.append('elevenLabsApiKey', elKey);
+
+      const savedOrKey = localStorage.getItem('openrouterApiKey') || localStorage.getItem('openrouterKey') || '';
+      const orInput = document.getElementById('openrouter-api-key') || document.getElementById('openrouter-key-input');
+      const openrouterKeyVal = orInput ? orInput.value.trim() : savedOrKey;
+      if (openrouterKeyVal) fd.append('openrouterKey', openrouterKeyVal);
+
+      // Use the MAIN apiUrl for transcription with async polling to prevent browser timeouts
+      fd.append('isBatchMode', 'true');
+      const transData = await transcribeMediaWithPolling(fd);
+
+      // 4. Render video using MAIN apiUrl
+      if (batchBtn) {
+        batchBtn.innerHTML = `<span>🎬</span> جاري رندرة الكابشن على المقطع ${i + 1} من ${indices.length}...`;
+      }
+      const renderPayload = {
+        audioPath: transData.audioPath,
+        videoPath: transData.videoPath,
+        durationInSeconds: transData.durationInSeconds,
+        segments: transData.segments,
+        animationType: typeof selectedAnimation !== 'undefined' ? selectedAnimation : 'classic',
+        activeColor: document.getElementById('active-color') ? document.getElementById('active-color').value : '#FFFFFF',
+        inactiveColor: document.getElementById('inactive-color') ? document.getElementById('inactive-color').value : '#FFFFFF',
+        leftLogo: window.leftLogoBase64Global || transData.leftLogo || null,
+        rightLogo: window.rightLogoBase64Global || transData.rightLogo || null,
+        fontSize: document.getElementById('font-size') ? parseInt(document.getElementById('font-size').value) : 50,
+        bgColor: document.getElementById('bg-color') ? document.getElementById('bg-color').value : '#000000',
+        bgOpacity: document.getElementById('bg-opacity') ? parseFloat(document.getElementById('bg-opacity').value) : 86,
+        syncOffset: parseFloat(document.getElementById('sync-offset') ? document.getElementById('sync-offset').value : 0),
+        wordSpacing: document.getElementById('word-spacing') ? parseInt(document.getElementById('word-spacing').value) : 31,
+        bgPadding: document.getElementById('bg-padding') ? parseInt(document.getElementById('bg-padding').value) : 8,
+        showBg: document.getElementById('show-bg') ? !document.getElementById('show-bg').checked : true,
+        captionTop: typeof captionTop !== 'undefined' ? captionTop : 65,
+        fontFamily: document.getElementById('font-family-select') ? document.getElementById('font-family-select').value : 'thmanyah',
+        customFontName: (document.getElementById('font-family-select') && document.getElementById('font-family-select').value === 'custom') ? customFontName : null,
+        customFontBase64: (document.getElementById('font-family-select') && document.getElementById('font-family-select').value === 'custom') ? customFontDataUrl : null,
+        strokeColor: document.getElementById('stroke-color') ? document.getElementById('stroke-color').value : '#000000',
+        strokeWidth: document.getElementById('stroke-width') ? parseInt(document.getElementById('stroke-width').value) : 0,
+        shadowColor: document.getElementById('shadow-color') ? document.getElementById('shadow-color').value : '#000000',
+        shadowBlur: document.getElementById('shadow-blur') ? parseInt(document.getElementById('shadow-blur').value) : 0,
+        showTitle: true,
+        titleText: short.title ? cleanClipTitle(short.title) : '',
+        titleSubtext: '',
+        titleColor: document.getElementById('title-color-input') ? document.getElementById('title-color-input').value : '#FFFFFF',
+        titleBgColor: document.getElementById('title-bg-color-input') ? document.getElementById('title-bg-color-input').value : '#000000',
+        titleDuration: 0, // Force 0 (infinite) for Batch mode so sentences don't disappear
+        titleTop: document.getElementById('title-top-input') ? parseFloat(document.getElementById('title-top-input').value) : 14.0,
+        titleStyle: (document.getElementById('title-style-select') && document.getElementById('title-style-select').value) ? document.getElementById('title-style-select').value : 'split-contrast'
+      };
+
+      const startRes = await fetch(`${apiUrl}/api/render/${transData.taskId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(renderPayload)
+      });
+
+      if (!startRes.ok) {
+        const errDetail = await startRes.json().catch(() => ({ detail: 'فشل بدء الرندر' }));
+        throw new Error(`فشل رندرة المقطع #${sIdx + 1}: ${errDetail.detail || startRes.status}`);
+      }
+
+      const renderTaskStatus = await pollRenderStatusResilient(apiUrl, transData.taskId);
+
+      const downloadUrl = `${apiUrl.replace(/\/$/, '')}/${renderTaskStatus.videoUrl.replace(/^\//, '')}`;
+      const finalVideoBlob = await downloadVideoBlobWithRetry(downloadUrl);
+      const finalUrl = URL.createObjectURL(finalVideoBlob);
+
+      // 5. Save automatically to 48h Archive IMMEDIATELY!
+      if (typeof window.saveHistoryEntry === 'function') {
+        try {
+          await window.saveHistoryEntry({
+            title: `🎬 ${short.title} (${short.start_time} - ${short.end_time})`,
+            videoUrl: finalUrl,
+            serverUrl: `${apiUrl.replace(/\/$/, '')}/${renderTaskStatus.videoUrl}`,
+            blob: finalVideoBlob,
+            settings: {
+              animationType: typeof selectedAnimation !== 'undefined' ? selectedAnimation : 'classic',
+              fontFamily: document.getElementById('font-family-select') ? document.getElementById('font-family-select').value : 'thmanyah'
+            }
+          });
+          if (typeof updateHistoryBadge === 'function') updateHistoryBadge();
+          if (typeof renderHistoryModal === 'function') renderHistoryModal();
+        } catch (archiveErr) {
+          console.warn('Archive save error (batch shorts):', archiveErr);
+        }
+      }
+
+      successCount++;
+    } catch (err) {
+      console.error(`Batch processing error for item ${sIdx}:`, err);
+      alert(`⚠️ خطأ في معالجة المقطع #${sIdx + 1} (${short.title.substring(0,20)}...):\n${err.message}\n\nسيتم الانتقال للمقطع التالي.`);
+    }
+  }
+
+  if (batchBtn) {
+    batchBtn.disabled = false;
+    batchBtn.style.opacity = '1';
+    batchBtn.innerHTML = originalBtnHtml;
+  }
+
+  alert(`🎉 اكتملت المعالجة الجماعية بنجاح!\nتم توليد وحفظ ${successCount} فيديو في "أرشيف الفيديوهات (48h)".`);
+  
+  // Open 48h archive modal to let user view/download rendered videos
+  if (typeof openHistoryModal === 'function') {
+    openHistoryModal();
+  }
+};
+
+
+window.cutVideoSegment = async function(youtubeUrl, startTime, endTime, idx, btn) {
+  if (!youtubeUrl) {
+    alert("رابط اليوتيوب غير متوفر لقص المقطع!");
+    return;
+  }
+
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+  btn.style.pointerEvents = 'none';
+  btn.innerHTML = '<span>⏳</span> جاري القص...';
+
+  try {
+    const blob = await performAsyncCut(youtubeUrl, startTime, endTime, 1080, (progText) => {
+      btn.innerHTML = `<span>⏳</span> ${progText}`;
+    });
+
+    const downloadUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = `short_clip_${idx}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(downloadUrl);
+    
+    alert(`تم تحميل مقطع الـ Shorts المقصوص #${idx} بنجاح! 🎉`);
+  } catch (err) {
+    console.error(err);
+    alert('حدث خطأ أثناء قص المقطع: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.style.pointerEvents = 'auto';
+    btn.innerHTML = originalHtml;
+  }
+};
+
+// ==================== 48-Hour Captioned Video History Manager (IndexedDB Persistent) ====================
+const HISTORY_STORAGE_KEY = 'rekaption_video_history_v1';
+const EXPIRE_DURATION_MS = 48 * 60 * 60 * 1000; // 48 Hours
+const ARCHIVE_DB_NAME = 'ReKaptionArchiveDB_v1';
+const ARCHIVE_STORE = 'video_blobs';
+
+function openArchiveDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(ARCHIVE_DB_NAME, 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(ARCHIVE_STORE)) {
+        db.createObjectStore(ARCHIVE_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = (e) => resolve(e.target.result);
+    req.onerror = (e) => reject(e.target.error);
+  });
+}
+
+async function saveVideoBlobToIDB(id, blob) {
+  try {
+    const db = await openArchiveDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(ARCHIVE_STORE, 'readwrite');
+      const store = tx.objectStore(ARCHIVE_STORE);
+      store.put({ id: id, blob: blob });
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = (e) => reject(e.target.error);
+    });
+  } catch (e) {
+    console.warn("IDB save error:", e);
+  }
+}
+
+async function getVideoBlobFromIDB(id) {
+  try {
+    const db = await openArchiveDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(ARCHIVE_STORE, 'readonly');
+      const store = tx.objectStore(ARCHIVE_STORE);
+      const req = store.get(id);
+      req.onsuccess = () => resolve(req.result ? req.result.blob : null);
+      req.onerror = (e) => reject(e.target.error);
+    });
+  } catch (e) {
+    console.warn("IDB get error:", e);
+    return null;
+  }
+}
+
+async function deleteVideoBlobFromIDB(id) {
+  try {
+    const db = await openArchiveDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(ARCHIVE_STORE, 'readwrite');
+      const store = tx.objectStore(ARCHIVE_STORE);
+      store.delete(id);
+      tx.oncomplete = () => resolve(true);
+      tx.onerror = (e) => reject(e.target.error);
+    });
+  } catch (e) {
+    console.warn("IDB delete error:", e);
+  }
+}
+
+window.getHistoryEntries = function() {
+  try {
+    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const entries = JSON.parse(raw);
+    const now = Date.now();
+    const validEntries = entries.filter(item => now < item.expiryTime);
+    if (validEntries.length !== entries.length) {
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(validEntries));
+    }
+    return validEntries;
+  } catch (e) {
+    console.warn("Error reading history storage:", e);
+    return [];
+  }
+};
+
+window.saveHistoryEntry = async function(entry) {
+  const id = entry.id || ('vid_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6));
+
+  let serverUrl = entry.serverUrl || '';
+  if (serverUrl && !serverUrl.startsWith('http') && !serverUrl.startsWith('blob:') && typeof apiUrl !== 'undefined') {
+    serverUrl = `${apiUrl.replace(/\/$/, '')}/${serverUrl.replace(/^\//, '')}`;
+  }
+
+  // Try to save blob to IndexedDB (might fail for very large files - non-fatal)
+  if (entry.blob) {
+    try {
+      await saveVideoBlobToIDB(id, entry.blob);
+    } catch (blobErr) {
+      console.warn("IDB blob save failed (file may be too large):", blobErr);
+    }
+  }
+
+  // Always save metadata to localStorage regardless of blob result
+  try {
+    let entries = getHistoryEntries();
+    const now = Date.now();
+    const newEntry = {
+      id: id,
+      title: entry.title || 'فيديو كابشن مجهز',
+      serverUrl: serverUrl,
+      videoUrl: entry.videoUrl || '',
+      timestamp: now,
+      expiryTime: now + EXPIRE_DURATION_MS,
+      duration: entry.duration || ''
+    };
+    entries = entries.filter(item => item.id !== id);
+    entries.unshift(newEntry);
+    if (entries.length > 50) entries = entries.slice(0, 50);
+
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(entries));
+    if (typeof window.updateHistoryBadge === 'function') window.updateHistoryBadge();
+    if (typeof window.renderHistoryModal === 'function') window.renderHistoryModal();
+    return newEntry;
+  } catch (e) {
+    console.warn("Error saving history metadata:", e);
+  }
+};
+
+
+window.deleteHistoryEntry = async function(id) {
+  try {
+    let entries = getHistoryEntries();
+    entries = entries.filter(item => item.id !== id);
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(entries));
+    await deleteVideoBlobFromIDB(id);
+    updateHistoryBadge();
+    renderHistoryModal();
+  } catch (e) {
+    console.warn("Error deleting history entry:", e);
+  }
+};
+
+window.clearExpiredHistoryEntries = function() {
+  getHistoryEntries();
+  updateHistoryBadge();
+  renderHistoryModal();
+  alert("تم تنظيف الأرشيف وتحديث الفيديوهات الصالحة بنجاح! 🧹");
+};
+
+function updateHistoryBadge() {
+  const badge = document.getElementById('history-badge');
+  if (badge) {
+    const entries = getHistoryEntries();
+    badge.textContent = entries.length;
+  }
+}
+window.updateHistoryBadge = updateHistoryBadge;
+
+function formatCountdown(expiryTime) {
+  const diffMs = expiryTime - Date.now();
+  if (diffMs <= 0) return "منتهي الصلاحية";
+  const totalSecs = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  return `⏳ متبقي ${hours} ساعة و ${mins} دقيقة`;
+}
+
+window.renderHistoryModal = async function() {
+  const grid = document.getElementById('history-cards-grid');
+  const emptyView = document.getElementById('history-empty-view');
+  if (!grid) return;
+
+  const entries = getHistoryEntries();
+  if (!entries || entries.length === 0) {
+    grid.innerHTML = '';
+    if (emptyView) emptyView.classList.remove('hidden');
+    return;
+  }
+
+  if (emptyView) emptyView.classList.add('hidden');
+
+  // Render initial card frames
+  grid.innerHTML = entries.map(item => `
+    <div id="hist-card-${item.id}" style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(139, 92, 246, 0.25); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px; position: relative;">
+      <div class="video-container" style="width: 100%; height: 210px; border-radius: 10px; overflow: hidden; background: #000; display: flex; align-items: center; justify-content: center; position: relative;">
+        <div class="spinner" style="width: 24px; height: 24px; border-left-color: #8b5cf6;"></div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <h4 style="font-size: 14px; font-weight: 800; color: #fff; margin: 0; line-height: 1.4;">${item.title}</h4>
+        <span style="font-size: 11px; color: #a78bfa; font-weight: 600;">${formatCountdown(item.expiryTime)}</span>
+      </div>
+      <div style="display: flex; gap: 8px; margin-top: 4px;">
+        <button disabled class="btn-primary" style="flex: 1; padding: 8px; justify-content: center; font-size: 12px; opacity: 0.5;">
+          <span>📥</span> تنزيل
+        </button>
+        <button onclick="deleteHistoryEntry('${item.id}')" class="btn-secondary" style="padding: 8px 12px; font-size: 12px; color: #f87171; border-color: rgba(248, 113, 113, 0.3); cursor: pointer;">
+          <span>🗑️</span>
+        </button>
+      </div>
+    </div>
+  `).join('');
+
+  // Retrieve Blobs asynchronously from IndexedDB and bind active URLs
+  for (const item of entries) {
+    const cardEl = document.getElementById(`hist-card-${item.id}`);
+    if (!cardEl) continue;
+
+    let activeUrl = '';
+    const storedBlob = await getVideoBlobFromIDB(item.id);
+
+    if (storedBlob && storedBlob.size > 0) {
+      activeUrl = URL.createObjectURL(storedBlob);
+    } else if (item.serverUrl && !item.serverUrl.startsWith('blob:')) {
+      activeUrl = item.serverUrl;
+      if (!activeUrl.startsWith('http') && typeof apiUrl !== 'undefined') {
+        activeUrl = `${apiUrl.replace(/\/$/, '')}/${activeUrl.replace(/^\//, '')}`;
+      }
+    } else if (item.videoUrl && !item.videoUrl.startsWith('blob:')) {
+      activeUrl = item.videoUrl;
+    }
+
+    if (!activeUrl) {
+      cardEl.querySelector('.video-container').innerHTML = `
+        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; gap: 6px; color: #f87171; font-size: 12px;">
+          <span>⚠️ الملف انتهت صلاحيته أو غير متوفر</span>
+        </div>
+      `;
+      continue;
+    }
+
+    const safeTitle = item.title.replace(/[^a-zA-Z0-9\u0600-\u06FF]/g, '_');
+
+    cardEl.innerHTML = `
+      <div style="width: 100%; border-radius: 10px; overflow: hidden; background: #000; position: relative;">
+        <video src="${activeUrl}" controls style="width: 100%; height: 210px; object-fit: contain; display: block;"></video>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <h4 style="font-size: 14px; font-weight: 800; color: #fff; margin: 0; line-height: 1.4;">${item.title}</h4>
+        <span style="font-size: 11px; color: #a78bfa; font-weight: 600;">${formatCountdown(item.expiryTime)}</span>
+      </div>
+      <div style="display: flex; gap: 8px; margin-top: 4px;">
+        <a href="${activeUrl}" download="${safeTitle}.mp4" class="btn-primary" style="flex: 1; padding: 8px; justify-content: center; font-size: 12px; text-decoration: none; display: inline-flex; align-items: center; gap: 6px;">
+          <span>📥</span> تنزيل
+        </a>
+        <button onclick="deleteHistoryEntry('${item.id}')" class="btn-secondary" style="padding: 8px 12px; font-size: 12px; color: #f87171; border-color: rgba(248, 113, 113, 0.3); cursor: pointer;">
+          <span>🗑️</span>
+        </button>
+      </div>
+    `;
+  }
+};
+
+// Initialize history badge on page load
+onDOMReady(() => {
+  if (typeof updateHistoryBadge === 'function') {
+    updateHistoryBadge();
+  }
+});
+
+// ==================== Batch Caption Processing Queue ====================
+let currentSuggestedShorts = [];
+let selectedShortsIndices = new Set();
+
+window.toggleShortSelection = function(index, isChecked) {
+  if (isChecked) {
+    selectedShortsIndices.add(index);
+  } else {
+    selectedShortsIndices.delete(index);
+  }
+  updateBatchToolbar();
+};
+
+window.toggleSelectAllShorts = function(isChecked) {
+  selectedShortsIndices.clear();
+  if (isChecked && currentSuggestedShorts.length > 0) {
+    currentSuggestedShorts.forEach((_, idx) => selectedShortsIndices.add(idx));
+  }
+  
+  document.querySelectorAll('.short-card-chk').forEach(chk => {
+    chk.checked = isChecked;
+  });
+  
+  updateBatchToolbar();
+};
+
+function updateBatchToolbar() {
+  const btn = document.getElementById('batch-caption-btn');
+  const badge = document.getElementById('batch-selected-count-badge');
+  const count = selectedShortsIndices.size;
+  
+  if (badge) badge.textContent = `(${count})`;
+  if (btn) {
+    if (count > 0) {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+    } else {
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+      btn.style.cursor = 'not-allowed';
+    }
+  }
+}
+
+window.startBatchCaptionProcess = async function() {
+  if (selectedShortsIndices.size === 0) {
+    alert("يرجى تحديد مقطع شورت واحد على الأقل للمعالجة الدُفعية!");
+    return;
+  }
+
+  const youtubeUrl = document.getElementById('gemini-yt-url').value.trim();
+  if (!youtubeUrl) {
+    alert("رابط اليوتيوب الأصلي غير متوفر!");
+    return;
+  }
+
+  pendingBatchProcess = true;
+  pendingBatchArgs = { youtubeUrl };
+
+  // Set up modal inputs to reflect current settings
+  const modalSelect = document.getElementById('modal-caption-engine-select');
+  const modalElInput = document.getElementById('modal-elevenlabs-key-input');
+  
+  const currentEngine = localStorage.getItem('caption_engine') || 'v1';
+  const currentElKey = localStorage.getItem('elevenlabs_api_key') || '';
+  
+  if (modalSelect) modalSelect.value = currentEngine;
+  if (modalElInput) modalElInput.value = currentElKey;
+
+  selectShortOption('vertical');
+
+  if (typeof window.toggleModalEngineFields === 'function') {
+    window.toggleModalEngineFields();
+  }
+
+  if (typeof window.populateModalTemplates === 'function') window.populateModalTemplates();
+  const modal = document.getElementById('short-options-modal');
+  if (modal) modal.style.display = 'flex';
+};
+
+// Helper: Transcribe media via async task polling to bypass browser socket timeouts (Failed to fetch)
+async function transcribeMediaWithPolling(fd) {
+  try {
+    const asyncRes = await fetch(`${apiUrl}/api/transcribe-async`, {
+      method: 'POST',
+      body: fd
+    });
+    if (asyncRes.ok) {
+      const asyncData = await asyncRes.json();
+      const taskId = asyncData.taskId;
+      if (taskId) {
+        let pollCount = 0;
+        let consecutiveTransErrors = 0;
+        while (true) {
+          await new Promise(r => setTimeout(r, 2000));
+          pollCount++;
+          try {
+            const statusRes = await fetch(`${apiUrl}/api/transcribe-task-status/${taskId}`);
+            if (!statusRes.ok) {
+              consecutiveTransErrors++;
+              if (consecutiveTransErrors > 15) throw new Error('فشل الاستعلام عن حالة معالجة الكابشن.');
+              continue;
+            }
+            const statusData = await statusRes.json();
+            consecutiveTransErrors = 0;
+            if (statusData.status === 'success') {
+              return statusData.result;
+            } else if (statusData.status === 'failed') {
+              throw new Error(statusData.error || 'فشلت معالجة الكابشن بالسيرفر.');
+            }
+          } catch (pollErr) {
+            if (pollErr.message && pollErr.message.includes('فشلت معالجة الكابشن')) throw pollErr;
+            consecutiveTransErrors++;
+            console.warn(`[Transcribe Poll] Network glitch (${consecutiveTransErrors}/15):`, pollErr.message);
+            if (consecutiveTransErrors > 15) throw pollErr;
+          }
+        }
+      }
+    }
+  } catch (e_async) {
+    console.warn('Async transcribe polling failed or not available, falling back to direct transcribe:', e_async);
+  }
+
+  // Direct synchronous fallback
+  const transRes = await fetch(`${apiUrl}/api/transcribe`, {
+    method: 'POST',
+    body: fd
+  });
+  if (!transRes.ok) {
+    const errDetail = await transRes.json().catch(() => ({ detail: 'فشل التفريغ' }));
+    throw new Error(errDetail.detail || `فشل التفريغ (رمز: ${transRes.status})`);
+  }
+  return await transRes.json();
+}
+
+async function executeBatchCaptionProcess(youtubeUrlOverride, shortChoice) {
+  const youtubeUrl = youtubeUrlOverride || document.getElementById('gemini-yt-url')?.value?.trim() || '';
+  const convertChoice = shortChoice || 'original';
+  const indicesToProcess = Array.from(selectedShortsIndices).sort((a, b) => a - b);
+  const total = indicesToProcess.length;
+
+  const modal = document.getElementById('batch-progress-modal');
+  const modalStep = document.getElementById('batch-modal-step');
+  const modalBarFill = document.getElementById('batch-modal-bar-fill');
+  const modalStatusDesc = document.getElementById('batch-modal-status-desc');
+
+  if (modal) modal.style.display = 'flex';
+
+  let successCount = 0;
+
+  for (let i = 0; i < total; i++) {
+    const idx = indicesToProcess[i];
+    const shortItem = currentSuggestedShorts[idx];
+    if (!shortItem) continue;
+
+    const currentNum = i + 1;
+    const percent = Math.round((currentNum / total) * 100);
+
+    if (modalStep) modalStep.textContent = `المقطع ${currentNum} من ${total}`;
+    if (modalBarFill) modalBarFill.style.width = `${percent}%`;
+    if (modalStatusDesc) modalStatusDesc.textContent = `جارٍ قص المقطع #${idx+1} (${shortItem.title}) وتحليله بالذكاء الاصطناعي...`;
+
+    try {
+      // 1. Perform Async Cut
+      let blob = await performAsyncCut(youtubeUrl, shortItem.start_time, shortItem.end_time, 1080, (progMsg) => {
+        if (modalStatusDesc) modalStatusDesc.textContent = `المقطع #${idx+1}: ${progMsg}`;
+      });
+
+      // 2. Perform Vertical Conversion if selected
+      if (convertChoice === 'vertical') {
+        if (modalStatusDesc) modalStatusDesc.textContent = `المقطع #${idx+1}: جارٍ التحويل إلى طولي (9:16)...`;
+        const fd = new FormData();
+        const rawFile = new File([blob], `short_${idx+1}.mp4`, { type: 'video/mp4' });
+        fd.append('file', rawFile);
+
+        const convRes = await fetch(audioApiUrl + '/api/convert-vertical-async', {
+          method: 'POST',
+          body: fd
+        });
+
+        if (convRes.ok) {
+          const convTaskData = await convRes.json();
+          const convTaskId = convTaskData.taskId;
+
+          let pollInterval = null;
+          let convConsecutiveErrors = 0;
+          const pollPromise = new Promise((resolve, reject) => {
+            pollInterval = setInterval(async () => {
+              try {
+                const statusRes = await fetch(`${audioApiUrl}/api/task-status/${convTaskId}`);
+                if (!statusRes.ok) {
+                  convConsecutiveErrors++;
+                  if (convConsecutiveErrors > 15) {
+                    clearInterval(pollInterval);
+                    reject(new Error('فشل متابعة حالة التحويل للطولي'));
+                  }
+                  return;
+                }
+                const task = await statusRes.json();
+                convConsecutiveErrors = 0;
+                if (task.status === 'success') {
+                  clearInterval(pollInterval);
+                  resolve(task);
+                } else if (task.status === 'failed') {
+                  clearInterval(pollInterval);
+                  reject(new Error(task.error || 'فشلت عملية التحويل للطولي'));
+                }
+              } catch (err) {
+                convConsecutiveErrors++;
+                if (convConsecutiveErrors > 15) {
+                  clearInterval(pollInterval);
+                  reject(err);
+                }
+              }
+            }, 2000);
+          });
+
+          const vertTaskRes = await pollPromise;
+          const vertUrl = vertTaskRes.videoUrl.startsWith('http') ? vertTaskRes.videoUrl : (audioApiUrl + '/' + vertTaskRes.videoUrl);
+          blob = await downloadVideoBlobWithRetry(vertUrl);
+        }
+      }
+
+      // 3. AI Speech Transcription & Word Timestamp Alignment
+      if (modalStatusDesc) modalStatusDesc.textContent = `المقطع #${idx+1}: جارٍ التفريغ والتوقيت بالذكاء الاصطناعي...`;
+
+      const audioFile = new File([blob], `batch_clip_${idx+1}.mp4`, { type: 'video/mp4' });
+      const transFd = new FormData();
+      transFd.append('audio', audioFile);
+      transFd.append('minWords', document.getElementById('min-words') ? document.getElementById('min-words').value : '2');
+      transFd.append('maxWords', document.getElementById('max-words') ? document.getElementById('max-words').value : '5');
+      transFd.append('animation', typeof selectedAnimation !== 'undefined' ? selectedAnimation : 'classic');
+      transFd.append('activeColor', document.getElementById('active-color') ? document.getElementById('active-color').value : '#FFFFFF');
+      transFd.append('inactiveColor', document.getElementById('inactive-color') ? document.getElementById('inactive-color').value : '#FFFFFF');
+      
+      const groqKey = localStorage.getItem('groq_api_key') || '';
+      const geminiKey = localStorage.getItem('gemini_api_key') || localStorage.getItem('geminiApiKey') || '';
+      const openrouterKey = localStorage.getItem('openrouterApiKey') || localStorage.getItem('openrouterKey') || '';
+      if (groqKey) transFd.append('groqApiKey', groqKey);
+      if (geminiKey) transFd.append('geminiApiKey', geminiKey);
+      if (openrouterKey) transFd.append('openrouterKey', openrouterKey);
+
+      const engineSelect = document.getElementById('caption-engine-select');
+      const engineVal = engineSelect ? engineSelect.value : 'v1';
+      transFd.append('captionEngine', engineVal);
+
+      const elKey = localStorage.getItem('elevenlabs_api_key') || '';
+      if (elKey) transFd.append('elevenLabsApiKey', elKey);
+      transFd.append('isBatchMode', 'true');
+
+      const transData = await transcribeMediaWithPolling(transFd);
+
+      // 4. Burn-in Remotion Captions onto Video
+      if (modalStatusDesc) modalStatusDesc.textContent = `المقطع #${idx+1}: جارٍ طباعة ورندر الكابشن النهائي...`;
+
+      const renderPayload = {
+        audioPath: transData.audioPath,
+        videoPath: transData.videoPath,
+        durationInSeconds: transData.durationInSeconds,
+        segments: transData.segments,
+        animationType: typeof selectedAnimation !== 'undefined' ? selectedAnimation : 'classic',
+        activeColor: document.getElementById('active-color') ? document.getElementById('active-color').value : '#FFFFFF',
+        inactiveColor: document.getElementById('inactive-color') ? document.getElementById('inactive-color').value : '#FFFFFF',
+        leftLogo: window.leftLogoBase64Global || transData.leftLogo || null,
+        rightLogo: window.rightLogoBase64Global || transData.rightLogo || null,
+        fontSize: document.getElementById('font-size') ? parseInt(document.getElementById('font-size').value) : 50,
+        bgColor: document.getElementById('bg-color') ? document.getElementById('bg-color').value : '#000000',
+        bgOpacity: document.getElementById('bg-opacity') ? parseFloat(document.getElementById('bg-opacity').value) : 86,
+        syncOffset: parseFloat(document.getElementById('sync-offset') ? document.getElementById('sync-offset').value : 0),
+        wordSpacing: document.getElementById('word-spacing') ? parseInt(document.getElementById('word-spacing').value) : 31,
+        bgPadding: document.getElementById('bg-padding') ? parseInt(document.getElementById('bg-padding').value) : 8,
+        showBg: document.getElementById('show-bg') ? !document.getElementById('show-bg').checked : true,
+        captionTop: typeof captionTop !== 'undefined' ? captionTop : 65,
+        fontFamily: document.getElementById('font-family-select') ? document.getElementById('font-family-select').value : 'thmanyah',
+        customFontName: (document.getElementById('font-family-select') && document.getElementById('font-family-select').value === 'custom') ? customFontName : null,
+        customFontBase64: (document.getElementById('font-family-select') && document.getElementById('font-family-select').value === 'custom') ? customFontDataUrl : null,
+        strokeColor: document.getElementById('stroke-color') ? document.getElementById('stroke-color').value : '#000000',
+        strokeWidth: document.getElementById('stroke-width') ? parseInt(document.getElementById('stroke-width').value) : 0,
+        shadowColor: document.getElementById('shadow-color') ? document.getElementById('shadow-color').value : '#000000',
+        shadowBlur: document.getElementById('shadow-blur') ? parseInt(document.getElementById('shadow-blur').value) : 0,
+        showTitle: document.getElementById('show-title-toggle') ? document.getElementById('show-title-toggle').checked : false,
+        titleText: cleanClipTitle(shortItem.title),
+        titleSubtext: '',
+        titleColor: document.getElementById('title-color-input') ? document.getElementById('title-color-input').value : '#FFFFFF',
+        titleBgColor: document.getElementById('title-bg-color-input') ? document.getElementById('title-bg-color-input').value : '#000000',
+        titleDuration: document.getElementById('title-duration-input') ? parseFloat(document.getElementById('title-duration-input').value) : 6.5,
+        titleTop: document.getElementById('title-top-input') ? parseFloat(document.getElementById('title-top-input').value) : 14.0,
+        titleStyle: (document.getElementById('title-style-select') && document.getElementById('title-style-select').value) ? document.getElementById('title-style-select').value : 'split-contrast'
+      };
+
+      const startRes = await fetch(`${apiUrl}/api/render/${transData.taskId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(renderPayload)
+      });
+
+      if (!startRes.ok) {
+        const errJson = await startRes.json().catch(() => ({ detail: 'فشل بدء رندر الكابشن' }));
+        throw new Error(`فشل رندر المقطع #${idx+1}: ${errJson.detail || startRes.status}`);
+      }
+
+      // Resilient render status polling
+      const renderTaskStatus = await pollRenderStatusResilient(apiUrl, transData.taskId, (prog) => {
+        if (modalStatusDesc) modalStatusDesc.textContent = `المقطع #${idx+1}: جاري رندرة الفيديو (${prog})...`;
+      });
+
+      // Resilient video download
+      const downloadUrl = `${apiUrl.replace(/\/$/, '')}/${renderTaskStatus.videoUrl.replace(/^\//, '')}`;
+      if (modalStatusDesc) modalStatusDesc.textContent = `المقطع #${idx+1}: جاري حفظ وتنزيل الفيديو...`;
+      const finalCaptionedBlob = await downloadVideoBlobWithRetry(downloadUrl);
+      const clipUrl = URL.createObjectURL(finalCaptionedBlob);
+
+      // 5. Save CAPTIONED video clip to 48-hour history archive IMMEDIATELY!
+      if (typeof window.saveHistoryEntry === 'function') {
+        try {
+          const cleanItemTitle = (typeof cleanClipTitle === 'function' ? cleanClipTitle(shortItem.title) : shortItem.title) || `مقطع ${idx+1}`;
+          await window.saveHistoryEntry({
+            title: cleanItemTitle,
+            videoUrl: clipUrl,
+            serverUrl: `${apiUrl.replace(/\/$/, '')}/${renderTaskStatus.videoUrl}`,
+            blob: finalCaptionedBlob,
+            settings: {
+              animationType: typeof selectedAnimation !== 'undefined' ? selectedAnimation : 'classic',
+              fontFamily: document.getElementById('font-family-select') ? document.getElementById('font-family-select').value : 'thmanyah'
+            }
+          });
+          if (typeof updateHistoryBadge === 'function') updateHistoryBadge();
+          if (typeof renderHistoryModal === 'function') renderHistoryModal();
+        } catch (archiveErr) {
+          console.warn('Archive save error (single short):', archiveErr);
+        }
+      }
+
+      successCount++;
+    } catch (err) {
+      console.error(`Error processing batch short #${idx+1}:`, err);
+      alert(`⚠️ خطأ في معالجة المقطع #${idx+1} (${shortItem.title.substring(0,20)}...):\n${err.message}\n\nسيتم الاستمرار في باقي المقاطع.`);
+    }
+  }
+
+  if (modal) modal.style.display = 'none';
+
+  alert(`🎉 اكتملت المعالجة الجماعية بنجاح! تم توليد وحفظ ${successCount} من أصل ${total} مقاطع بالكابشن النهائي في أرشيف الـ 48 ساعة.`);
+
+  // Switch to History Tab to let user preview & download all!
+  if (typeof switchMainTab === 'function') {
+    switchMainTab('history');
+  }
+};
+
+// ==================== Cohere ASR Logic ====================
+let cohereSelectedFile = null;
+
+window.handleCohereFileSelect = function(file) {
+  if (!file) return;
+  cohereSelectedFile = file;
+  const label = document.getElementById('cohere-file-label');
+  if (label) {
+    label.textContent = `تم اختيار: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`;
+    label.style.color = '#a855f7';
+  }
+};
+
+window.runCohereTranscription = async function() {
+  if (!cohereSelectedFile) {
+    alert('الرجاء اختيار أو رفع ملف صوتي أولاً!');
+    return;
+  }
+
+  const tokenInput = document.getElementById('cohere-hf-token');
+  const hfToken = tokenInput ? tokenInput.value.trim() : (localStorage.getItem('cohereHfToken') || '');
+
+  const btn = document.getElementById('cohere-transcribe-btn');
+  const outputText = document.getElementById('cohere-output-text');
+  const origHtml = btn.innerHTML;
+
+  btn.disabled = true;
+  btn.style.opacity = '0.6';
+  btn.innerHTML = '<span>⏳</span> جاري استخراج النص وتفريغ الصوت...';
+  outputText.value = 'جاري معالجة وتفريغ الصوت... يرجى الانتظار لحظات...';
+
+  try {
+    const fd = new FormData();
+    fd.append('audio', cohereSelectedFile);
+    if (hfToken) {
+      fd.append('hf_token', hfToken);
+    }
+
+    const res = await fetch(`${apiUrl}/api/transcribe-cohere`, {
+      method: 'POST',
+      body: fd
+    });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`فشل الاتصال بـ API التفريغ (Status ${res.status}: ${errText})`);
+    }
+
+    const data = await res.json();
+    outputText.value = data.text || 'تم الانتهاء ولم يتم إرجاع نص.';
+    alert('✨ تم استخراج النص الصوتي بنجاح!');
+  } catch (err) {
+    console.error(err);
+    outputText.value = 'حدث خطأ أثناء الاتصال بنموذج التفريغ: ' + err.message;
+    alert('حدث خطأ أثناء التفريغ: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.style.opacity = '1';
+    btn.innerHTML = origHtml;
+  }
+};
+
+// Initialize saved HF token on load
+onDOMReady(() => {
+  const savedToken = localStorage.getItem('cohereHfToken');
+  const tokenInput = document.getElementById('cohere-hf-token');
+  if (savedToken && tokenInput) {
+    tokenInput.value = savedToken;
+  }
+});
+
+function fileToBase64DataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = error => reject(error);
+    reader.readAsDataURL(file);
+  });
+}
+
+window.copyCohereText = function() {
+  const textarea = document.getElementById('cohere-output-text');
+  if (!textarea || !textarea.value) {
+    alert('لا يوجد نص لنسخه!');
+    return;
+  }
+  textarea.select();
+  document.execCommand('copy');
+  alert('📋 تم نسخ النص بنجاح إلى الحافظة!');
+};
+
+window.openComparisonModal = function() {
+  if (!transcribeData) {
+    alert('لا توجد بيانات تفريغ متاحة حالياً للمقارنة.');
+    return;
+  }
+  const modal = document.getElementById('comparison-modal');
+  const origBox = document.getElementById('comparison-original-text');
+  const txtOnlyBox = document.getElementById('comparison-textonly-text');
+  const corrBox = document.getElementById('comparison-corrected-text');
+  if (origBox) origBox.textContent = transcribeData.originalText || 'غير متوفر';
+  if (txtOnlyBox) txtOnlyBox.textContent = transcribeData.textOnlyText || 'غير متوفر';
+  if (corrBox) corrBox.textContent = transcribeData.audioCorrectedText || (transcribeData.segments || []).map(s => s.text).join('\n');
+  if (modal) modal.style.display = 'flex';
+};
+
+
+window.closeComparisonModal = function() {
+  const modal = document.getElementById('comparison-modal');
+  if (modal) modal.style.display = 'none';
+};
+
+// ==================== نظام القوالب — الدوال الأساسية ====================
+const TEMPLATES_KEY = 'rekaption_templates_v2';
+let _pickerCallback = null;
+
+function getTemplates() {
+  try { return JSON.parse(localStorage.getItem(TEMPLATES_KEY) || '[]'); }
+  catch { return []; }
+}
+function saveTemplates(arr) {
+  localStorage.setItem(TEMPLATES_KEY, JSON.stringify(arr));
+}
+
+function collectCurrentSettings() {
+  const g = id => document.getElementById(id);
+  const val = (id, fb) => { const el=g(id); return el ? el.value : fb; };
+  const num = (id, fb) => { const el=g(id); return el ? parseFloat(el.value) : fb; };
+  const int = (id, fb) => { const el=g(id); return el ? parseInt(el.value) : fb; };
+  const chk = (id, fb) => { const el=g(id); return el ? el.checked : fb; };
+  return {
+    animationType  : typeof selectedAnimation !== 'undefined' ? selectedAnimation : 'classic',
+    activeColor    : val('active-color', '#FFFFFF'),
+    inactiveColor  : val('inactive-color', '#FFFFFF'),
+    bgColor        : val('bg-color', '#000000'),
+    bgOpacity      : num('bg-opacity', 86),
+    fontSize       : int('font-size', 50),
+    syncOffset     : num('sync-offset', 0.20),
+    wordSpacing    : int('word-spacing', 31),
+    bgPadding      : int('bg-padding', 8),
+    showBg         : chk('show-bg', false),
+    captionTop     : typeof captionTop !== 'undefined' ? captionTop : 65,
+    fontFamily     : val('font-family-select', 'thmanyah'),
+    customFontName : typeof customFontName !== 'undefined' ? customFontName : null,
+    customFontBase64: typeof customFontDataUrl !== 'undefined' ? customFontDataUrl : null,
+    strokeColor    : val('stroke-color', '#000000'),
+    strokeWidth    : int('stroke-width', 0),
+    shadowColor    : val('shadow-color', '#000000'),
+    shadowBlur     : int('shadow-blur', 0),
+    showTitle      : chk('show-title-toggle', true),
+    titleColor     : val('title-color-input', '#FFFFFF'),
+    titleBgColor   : val('title-bg-color-input', '#000000'),
+    titleDuration  : num('title-duration-input', 6.5),
+    titleTop       : num('title-top-input', 14),
+    titleStyle     : val('title-style-select', 'split-contrast'),
+    leftLogoBase64 : typeof leftLogoBase64Global  !== 'undefined' ? leftLogoBase64Global  : null,
+    rightLogoBase64: typeof rightLogoBase64Global !== 'undefined' ? rightLogoBase64Global : null,
+  };
+}
+
+// دالة مساعدة لتغيير الارتفاع الافتراضي تلقائياً عند تغيير ستايل العنوان
+window.onTitleStyleChange = function(style) {
+  const titleTopInput = document.getElementById('title-top-input');
+  const titleTopVal = document.getElementById('title-top-val');
+  if (titleTopInput) {
+    const targetVal = style === 'centered-rect' ? 42 : (style === 'split-contrast' ? 14 : 12);
+    titleTopInput.value = targetVal;
+    if (titleTopVal) titleTopVal.textContent = targetVal;
+    titleTopInput.dispatchEvent(new Event('input'));
+  }
+};
+
+function applySettingsToDOM(s) {
+  const g   = id => document.getElementById(id);
+  const set = (id, v) => { const el=g(id); if(el){ el.value=v; el.dispatchEvent(new Event('input')); } };
+  const setChk = (id, v) => { const el=g(id); if(el){ el.checked=v; el.dispatchEvent(new Event('change')); } };
+  const setHex = (id, v) => { const el=g(id); if(el) el.textContent=String(v).toUpperCase(); };
+
+  if (s.animationType !== undefined) {
+    selectedAnimation = s.animationType;
+    document.querySelectorAll('.anim-card, .upload-anim-card').forEach(c => {
+      if (c.dataset.anim === selectedAnimation) {
+        c.classList.add('selected');
+      } else {
+        c.classList.remove('selected');
+      }
+    });
+  }
+  if (s.activeColor)   { set('active-color',   s.activeColor);   setHex('active-color-hex',   s.activeColor); }
+  if (s.inactiveColor) { set('inactive-color', s.inactiveColor); setHex('inactive-color-hex', s.inactiveColor); }
+  if (s.bgColor)       { set('bg-color',       s.bgColor);       setHex('bg-color-hex',       s.bgColor); }
+  if (s.strokeColor)   { set('stroke-color',   s.strokeColor);   setHex('stroke-color-hex',   s.strokeColor); }
+  if (s.shadowColor)   { set('shadow-color',   s.shadowColor);   setHex('shadow-color-hex',   s.shadowColor); }
+  if (s.bgOpacity   !== undefined) set('bg-opacity',   s.bgOpacity);
+  if (s.fontSize    !== undefined) set('font-size',    s.fontSize);
+  if (s.syncOffset  !== undefined) set('sync-offset',  s.syncOffset);
+  if (s.wordSpacing !== undefined) set('word-spacing', s.wordSpacing);
+  if (s.bgPadding   !== undefined) set('bg-padding',   s.bgPadding);
+  if (s.strokeWidth !== undefined) set('stroke-width', s.strokeWidth);
+  if (s.shadowBlur  !== undefined) set('shadow-blur',  s.shadowBlur);
+  if (s.showBg      !== undefined) setChk('show-bg', s.showBg);
+  if (s.captionTop !== undefined) {
+    captionTop = s.captionTop;
+    const ctv=g('caption-top-val'); if(ctv) ctv.textContent=s.captionTop;
+    const cts=g('caption-top');     if(cts) cts.value=s.captionTop;
+  }
+
+  // الخط المخصص
+  if (s.customFontName !== undefined) window.customFontName = s.customFontName;
+  if (s.customFontBase64 !== undefined) {
+    window.customFontDataUrl = s.customFontBase64;
+    if (s.customFontBase64 && s.customFontName) {
+      const cleanFontName = s.customFontName.replace(/[^a-zA-Z0-9]/g, '');
+      const fontFace = new FontFace(cleanFontName, `url(${s.customFontBase64})`);
+      fontFace.load().then(loadedFace => {
+        document.fonts.add(loadedFace);
+      }).catch(err => console.error("Error loading custom font from template:", err));
+    }
+  }
+
+  if (s.fontFamily) { const ff=g('font-family-select'); if(ff){ ff.value=s.fontFamily; ff.dispatchEvent(new Event('change')); } }
+  const showT = s.showTitle !== undefined ? s.showTitle : true;
+  setChk('show-title-toggle', showT);
+  if (typeof toggleTitleFields === 'function') toggleTitleFields(showT);
+  if (s.titleColor)   { set('title-color-input',    s.titleColor);   setHex('title-color-hex', s.titleColor); }
+  if (s.titleBgColor) { set('title-bg-color-input', s.titleBgColor); setHex('title-bg-hex',    s.titleBgColor); }
+  if (s.titleDuration !== undefined) set('title-duration-input', s.titleDuration);
+  if (s.titleTop      !== undefined) set('title-top-input',      s.titleTop);
+  if (s.titleStyle)   { set('title-style-select',   s.titleStyle); }
+
+  // تحديث لوجو أعلى اليمين واليسار في الواجهة (DOM Preview)
+  if (s.leftLogoBase64 !== undefined) {
+    window.leftLogoBase64Global = s.leftLogoBase64;
+    const leftLogoContent = g('left-logo-content');
+    if (leftLogoContent) {
+      if (s.leftLogoBase64) {
+        leftLogoContent.innerHTML = `
+          <img src="${s.leftLogoBase64}" class="preview-thumbnail" alt="left logo preview" />
+          <button type="button" class="clear-btn" onclick="event.stopPropagation(); clearLogo('left')">&times;</button>
+        `;
+      } else {
+        leftLogoContent.innerHTML = `
+          <span class="file-box-icon">🖼️</span>
+          <span class="file-box-text">شعار أعلى اليسار</span>
+        `;
+      }
+    }
+  }
+  if (s.rightLogoBase64 !== undefined) {
+    window.rightLogoBase64Global = s.rightLogoBase64;
+    const rightLogoContent = g('right-logo-content');
+    if (rightLogoContent) {
+      if (s.rightLogoBase64) {
+        rightLogoContent.innerHTML = `
+          <img src="${s.rightLogoBase64}" class="preview-thumbnail" alt="right logo preview" />
+          <button type="button" class="clear-btn" onclick="event.stopPropagation(); clearLogo('right')">&times;</button>
+        `;
+      } else {
+        rightLogoContent.innerHTML = `
+          <span class="file-box-icon">🖼️</span>
+          <span class="file-box-text">شعار أعلى اليمين</span>
+        `;
+      }
+    }
+  }
+
+  // مزامنة المدخلات المزدوجة
+  [['upload-active-color','active-color'],['upload-inactive-color','inactive-color'],
+   ['upload-bg-color','bg-color'],['upload-stroke-color','stroke-color'],
+   ['upload-shadow-color','shadow-color'],['upload-font-size','font-size'],
+   ['upload-bg-opacity','bg-opacity'],['upload-sync-offset','sync-offset'],
+   ['upload-word-spacing','word-spacing'],['upload-bg-padding','bg-padding'],
+   ['upload-stroke-width','stroke-width'],['upload-shadow-blur','shadow-blur']
+  ].forEach(([u,e]) => { const eu=g(u),ee=g(e); if(eu&&ee) eu.value=ee.value; });
+  if (typeof updateLiveCaptionOverlay === 'function') updateLiveCaptionOverlay(0);
+}
+
+window.renderTemplateList = function() {
+  const container = document.getElementById('template-list-container');
+  const emptyMsg  = document.getElementById('template-empty-msg');
+  if (!container) return;
+  const templates = getTemplates();
+  if (templates.length === 0) { if(emptyMsg) emptyMsg.style.display='block'; return; }
+  if (emptyMsg) emptyMsg.style.display = 'none';
+  Array.from(container.children).forEach(c => { if(c !== emptyMsg) c.remove(); });
+  templates.forEach(t => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:10px;padding:8px 10px;';
+    row.innerHTML = `
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;font-weight:700;color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${t.name}</div>
+        <div style="font-size:10px;color:rgba(255,255,255,0.4);margin-top:2px;">${new Date(t.id).toLocaleDateString('ar-EG')}</div>
+      </div>
+      <div style="display:flex;gap:4px;flex-shrink:0;align-items:center;">
+        <div style="display:flex;gap:3px;margin-left:4px;">
+          <div style="width:13px;height:13px;border-radius:50%;background:${t.settings.activeColor||'#fff'};border:1px solid rgba(255,255,255,0.3);"></div>
+          <div style="width:13px;height:13px;border-radius:50%;background:${t.settings.bgColor||'#000'};border:1px solid rgba(255,255,255,0.3);"></div>
+          <div style="width:13px;height:13px;border-radius:50%;background:${t.settings.titleBgColor||'#000'};border:1px solid rgba(255,255,255,0.3);"></div>
+        </div>
+        <button onclick="applyTemplate('${t.id}')" style="background:rgba(139,92,246,0.25);color:#c4b5fd;border:1px solid rgba(139,92,246,0.4);border-radius:7px;padding:4px 10px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">تطبيق</button>
+        <button onclick="deleteTemplate('${t.id}')" style="background:rgba(239,68,68,0.15);color:#f87171;border:1px solid rgba(239,68,68,0.3);border-radius:7px;padding:4px 8px;font-size:11px;cursor:pointer;font-family:inherit;">✕</button>
+      </div>`;
+    container.appendChild(row);
+  });
+};
+
+// مزامنة القوالب مع Firestore عند تسجيل الدخول
+async function syncTemplatesWithFirestore() {
+  if (!currentUser || !window.firebaseDb) return;
+  try {
+    const snapshot = await window.firebaseDb
+      .collection('users')
+      .doc(currentUser.uid)
+      .collection('templates')
+      .get();
+    
+    const dbTemplates = [];
+    snapshot.forEach(doc => {
+      dbTemplates.push(doc.data());
+    });
+    
+    // ترتيب تنازلي حسب التاريخ (الأحدث أولاً)
+    dbTemplates.sort((a, b) => b.id - a.id);
+    
+    saveTemplates(dbTemplates);
+    renderTemplateList();
+  } catch (err) {
+    console.error("Error syncing templates with Firestore:", err);
+  }
+}
+window.syncTemplatesWithFirestore = syncTemplatesWithFirestore;
+
+window.applyTemplate = function(templateId) {
+  const t = getTemplates().find(x => String(x.id) === String(templateId));
+  if (!t) { alert('لم يتم العثور على القالب!'); return; }
+  applySettingsToDOM(t.settings);
+  closeTemplatePickerModal(true);
+  showToast('✅ تم تطبيق القالب: ' + t.name);
+};
+
+window.deleteTemplate = async function(templateId) {
+  if (!confirm('هل تريد حذف هذا القالب؟')) return;
+  
+  saveTemplates(getTemplates().filter(x => String(x.id) !== String(templateId)));
+  
+  if (currentUser && window.firebaseDb) {
+    try {
+      await window.firebaseDb
+        .collection('users')
+        .doc(currentUser.uid)
+        .collection('templates')
+        .doc(String(templateId))
+        .delete();
+    } catch (err) {
+      console.error("Failed to delete template from Firestore:", err);
+    }
+  }
+  
+  renderTemplateList();
+};
+
+window.openSaveTemplateModal = function() {
+  const inp = document.getElementById('template-name-input');
+  if (inp) inp.value = '';
+  const m = document.getElementById('save-template-modal');
+  if (m) { m.style.display='flex'; setTimeout(()=>{ if(inp) inp.focus(); },100); }
+};
+
+window.closeSaveTemplateModal = function() {
+  const m = document.getElementById('save-template-modal');
+  if (m) m.style.display = 'none';
+};
+
+window.confirmSaveTemplate = async function() {
+  const inp = document.getElementById('template-name-input');
+  const name = inp ? inp.value.trim() : '';
+  if (!name) { alert('يرجى كتابة اسم للقالب!'); return; }
+  
+  const newTemplate = {
+    id: Date.now(),
+    name: name,
+    settings: collectCurrentSettings()
+  };
+
+  const templates = getTemplates();
+  templates.unshift(newTemplate);
+  if (templates.length > 20) templates.splice(20);
+  saveTemplates(templates);
+  
+  if (currentUser && window.firebaseDb) {
+    try {
+      await window.firebaseDb
+        .collection('users')
+        .doc(currentUser.uid)
+        .collection('templates')
+        .doc(String(newTemplate.id))
+        .set(newTemplate);
+    } catch (err) {
+      console.error("Failed to save template to Firestore:", err);
+    }
+  }
+
+  closeSaveTemplateModal();
+  renderTemplateList();
+  showToast('✅ تم حفظ القالب: ' + name);
+};
+
+window.openTemplatePickerModal = function(callback) {
+  _pickerCallback = callback || null;
+  const templates = getTemplates();
+  const listEl = document.getElementById('picker-template-list');
+  if (!listEl) { if(callback) callback(); return; }
+  listEl.innerHTML = '';
+  if (templates.length === 0) {
+    listEl.innerHTML = '<p style="font-size:12px;color:rgba(255,255,255,0.4);text-align:center;margin:16px 0;">لا توجد قوالب محفوظة — احفظ قالباً أولاً من قسم الإعدادات</p>';
+  } else {
+    templates.forEach(t => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.style.cssText = 'width:100%;display:flex;align-items:center;gap:10px;background:rgba(255,255,255,0.05);border:1px solid rgba(139,92,246,0.3);border-radius:12px;padding:12px 14px;cursor:pointer;color:#fff;font-family:inherit;text-align:right;transition:background 0.15s;';
+      btn.onmouseover = () => btn.style.background = 'rgba(139,92,246,0.15)';
+      btn.onmouseout  = () => btn.style.background = 'rgba(255,255,255,0.05)';
+      btn.innerHTML = `
+        <div style="display:flex;gap:4px;flex-shrink:0;">
+          <div style="width:18px;height:18px;border-radius:50%;background:${t.settings.activeColor||'#fff'};border:1px solid rgba(255,255,255,0.3);"></div>
+          <div style="width:18px;height:18px;border-radius:50%;background:${t.settings.bgColor||'#000'};border:1px solid rgba(255,255,255,0.3);"></div>
+          <div style="width:18px;height:18px;border-radius:50%;background:${t.settings.titleBgColor||'#000'};border:1px solid rgba(255,255,255,0.3);"></div>
+        </div>
+        <div style="flex:1;">
+          <div style="font-size:14px;font-weight:700;">${t.name}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,0.4);margin-top:2px;">${t.settings.fontFamily||'thmanyah'} • ${t.settings.animationType||'classic'}</div>
+        </div>
+        <span style="color:#a78bfa;font-size:20px;">✓</span>`;
+      btn.onclick = () => { applySettingsToDOM(t.settings); closeTemplatePickerModal(true); showToast('✅ تم تطبيق القالب: '+t.name); };
+      listEl.appendChild(btn);
+    });
+  }
+  const m = document.getElementById('template-picker-modal');
+  if (m) m.style.display = 'flex';
+};
+
+window.closeTemplatePickerModal = function(proceed) {
+  const m = document.getElementById('template-picker-modal');
+  if (m) m.style.display = 'none';
+  if (proceed && _pickerCallback) { _pickerCallback(); _pickerCallback = null; }
+};
+
+window.proceedWithCurrentSettings = function() { closeTemplatePickerModal(true); };
+
+window.showToast = function(msg) {
+  let toast = document.getElementById('rekaption-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'rekaption-toast';
+    toast.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1e1b4b;color:#fff;padding:10px 22px;border-radius:50px;font-size:13px;font-weight:700;z-index:99999;box-shadow:0 6px 20px rgba(0,0,0,0.5);border:1px solid rgba(139,92,246,0.4);opacity:0;transition:opacity 0.3s;pointer-events:none;white-space:nowrap;font-family:Cairo,sans-serif;direction:rtl;';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = msg;
+  toast.style.opacity = '1';
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { toast.style.opacity = '0'; }, 2500);
+};
+
+// ==================== Firebase API Keys Persistence & Auto Sync ====================
+async function loadKeysFromFirebase() {
+  let keys = null;
+
+  // 1. Try Firestore SDK
+  if (window.firebaseDb) {
+    try {
+      const doc = await window.firebaseDb.collection('system_keys').doc('config').get();
+      if (doc && doc.exists) {
+        keys = doc.data();
+      }
+    } catch (e_sdk) {
+      console.warn("Firestore SDK read warning:", e_sdk);
+    }
+  }
+
+  // 2. Try Realtime DB SDK
+  if (!keys && window.firebaseRtdb) {
+    try {
+      const snapshot = await window.firebaseRtdb.ref('system_keys/config').once('value');
+      if (snapshot && snapshot.exists()) {
+        keys = snapshot.val();
+      }
+    } catch (e_rtdb) {}
+  }
+
+  // 3. Try Firestore REST API Fallback
+  if (!keys) {
+    try {
+      const restRes = await fetch(`https://firestore.googleapis.com/v1/projects/rekaption/databases/(default)/documents/system_keys/config`);
+      if (restRes.ok) {
+        const restJson = await restRes.json();
+        if (restJson && restJson.fields) {
+          keys = {
+            groq_api_key: restJson.fields.groq_api_key?.stringValue || '',
+            elevenlabs_api_key: restJson.fields.elevenlabs_api_key?.stringValue || '',
+            openrouter_api_key: restJson.fields.openrouter_api_key?.stringValue || '',
+            gemini_api_key: restJson.fields.gemini_api_key?.stringValue || ''
+          };
+        }
+      }
+    } catch (e_rest) {}
+  }
+
+  if (keys) {
+    console.log("🔥 Loaded System API Keys from Firebase:", Object.keys(keys));
+    const groq = keys.groq_api_key || keys.groq || '';
+    const el = keys.elevenlabs_api_key || keys.elevenlabs || '';
+    const openrouter = keys.openrouter_api_key || keys.openrouter || '';
+    const gemini = keys.gemini_api_key || keys.gemini || '';
+
+    // Populate Admin System Inputs
+    if (document.getElementById('sys-groq-key') && groq) document.getElementById('sys-groq-key').value = groq;
+    if (document.getElementById('sys-elevenlabs-key') && el) document.getElementById('sys-elevenlabs-key').value = el;
+    if (document.getElementById('sys-openrouter-key') && openrouter) document.getElementById('sys-openrouter-key').value = openrouter;
+    if (document.getElementById('sys-gemini-key') && gemini) document.getElementById('sys-gemini-key').value = gemini;
+
+    // Populate Page Inputs
+    if (document.getElementById('groq-api-key-input') && groq) document.getElementById('groq-api-key-input').value = groq;
+    if (document.getElementById('elevenlabs-api-key-input') && el) document.getElementById('elevenlabs-api-key-input').value = el;
+    if (document.getElementById('modal-elevenlabs-key-input') && el) document.getElementById('modal-elevenlabs-key-input').value = el;
+    if (document.getElementById('openrouter-key-input') && openrouter) document.getElementById('openrouter-key-input').value = openrouter;
+    if (document.getElementById('openrouter-api-key') && openrouter) document.getElementById('openrouter-api-key').value = openrouter;
+
+    // Save to localStorage as local cache
+    if (groq) localStorage.setItem('groq_api_key', groq);
+    if (el) localStorage.setItem('elevenlabs_api_key', el);
+    if (openrouter) { localStorage.setItem('openrouterApiKey', openrouter); localStorage.setItem('openrouterKey', openrouter); }
+    if (gemini) { localStorage.setItem('gemini_api_key', gemini); localStorage.setItem('geminiApiKey', gemini); }
+  }
+}
+
+async function saveKeysToFirebase(groq, el, openrouter, gemini) {
+  const keysPayload = {
+    groq_api_key: groq,
+    elevenlabs_api_key: el,
+    openrouter_api_key: openrouter,
+    gemini_api_key: gemini,
+    updatedAt: new Date().toISOString()
+  };
+
+  let savedSuccess = false;
+
+  // 1. Firestore SDK
+  if (window.firebaseDb) {
+    try {
+      await window.firebaseDb.collection('system_keys').doc('config').set(keysPayload, { merge: true });
+      savedSuccess = true;
+      console.log("🔥 Saved System API Keys to Firestore SDK!");
+    } catch (err_fs) {
+      console.warn("Firestore SDK write error (Check Firebase Rules):", err_fs);
+    }
+  }
+
+  // 2. Realtime DB SDK
+  if (window.firebaseRtdb) {
+    try {
+      await window.firebaseRtdb.ref('system_keys/config').set(keysPayload);
+      savedSuccess = true;
+      console.log("🔥 Saved System API Keys to Realtime DB!");
+    } catch (err_rtdb) {
+      console.warn("Realtime DB write error:", err_rtdb);
+    }
+  }
+
+  // 3. Firestore REST API
+  try {
+    const restUrl = `https://firestore.googleapis.com/v1/projects/rekaption/databases/(default)/documents/system_keys/config`;
+    const restBody = {
+      fields: {
+        groq_api_key: { stringValue: groq },
+        elevenlabs_api_key: { stringValue: el },
+        openrouter_api_key: { stringValue: openrouter },
+        gemini_api_key: { stringValue: gemini }
+      }
+    };
+    const restRes = await fetch(restUrl, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(restBody)
+    }).catch(() => null);
+    if (restRes && restRes.ok) {
+      savedSuccess = true;
+      console.log("🔥 Saved System API Keys to Firestore REST API!");
+    }
+  } catch (err_rest) {
+    console.warn("Firestore REST write error:", err_rest);
+  }
+
+  return savedSuccess;
+}
+
+// Automatically load keys from Firebase on script start and DOM load
+loadKeysFromFirebase();
+
+// ==================== Admin Backend System Keys Management ====================
+async function fetchSystemKeysBackend() {
+  // Always load from Firebase first
+  await loadKeysFromFirebase();
+
+  if (!adminToken) return;
+  try {
+    const res = await fetch(`${apiUrl.replace(/\/$/, '')}/api/admin/get-system-keys?token=${adminToken}`);
+    if (res.ok) {
+      const keys = await res.json();
+      if (document.getElementById('sys-groq-key') && keys.groq) document.getElementById('sys-groq-key').value = keys.groq;
+      if (document.getElementById('sys-elevenlabs-key') && keys.elevenlabs) document.getElementById('sys-elevenlabs-key').value = keys.elevenlabs;
+      if (document.getElementById('sys-openrouter-key') && keys.openrouter) document.getElementById('sys-openrouter-key').value = keys.openrouter;
+      if (document.getElementById('sys-gemini-key') && keys.gemini) document.getElementById('sys-gemini-key').value = keys.gemini;
+    }
+  } catch (err) {
+    console.warn("Could not fetch system keys:", err);
+  }
+}
+
+async function saveSystemKeysBackend() {
+  if (!adminToken) {
+    alert("يرجى تسجيل الدخول كمدير أولاً");
+    return;
+  }
+  const groq = (document.getElementById('sys-groq-key')?.value || '').trim();
+  const el = (document.getElementById('sys-elevenlabs-key')?.value || '').trim();
+  const openrouter = (document.getElementById('sys-openrouter-key')?.value || '').trim();
+  const gemini = (document.getElementById('sys-gemini-key')?.value || '').trim();
+
+  // Save to Firebase Realtime DB & Firestore immediately
+  await saveKeysToFirebase(groq, el, openrouter, gemini);
+
+  try {
+    const res = await fetch(`${apiUrl.replace(/\/$/, '')}/api/admin/save-system-keys`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token: adminToken,
+        groq_api_key: groq,
+        elevenlabs_api_key: el,
+        openrouter_api_key: openrouter,
+        gemini_api_key: gemini
+      })
+    });
+
+    if (res.ok) {
+      // Also store in localStorage as local cache
+      if (groq) localStorage.setItem('groq_api_key', groq);
+      if (el) localStorage.setItem('elevenlabs_api_key', el);
+      if (openrouter) { localStorage.setItem('openrouterApiKey', openrouter); localStorage.setItem('openrouterKey', openrouter); }
+      if (gemini) { localStorage.setItem('gemini_api_key', gemini); localStorage.setItem('geminiApiKey', gemini); }
+
+      showToast('🔥 تم حفظ مفاتيح النظام في Firebase والسيرفر بنجاح!');
+    } else {
+      showToast('🔥 تم حفظ مفاتيح النظام في Firebase بنجاح!');
+    }
+  } catch (err) {
+    showToast('🔥 تم حفظ مفاتيح النظام في Firebase بنجاح!');
+  }
+}
+
+window.refreshAdminStats = refreshAdminStats;
+window.handleAdminLogout = handleAdminLogout;
+window.saveSystemKeysBackend = saveSystemKeysBackend;
+
+// تشغيل عند تحميل الصفحة
+onDOMReady(() => { 
+  renderTemplateList(); 
+  loadKeysFromFirebase();
+});

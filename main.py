@@ -24,7 +24,19 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
+
+@app.middleware("http")
+async def add_cors_headers_middleware(request, call_next):
+    response = await call_next(request)
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "*"
+    response.headers["Access-Control-Allow-Headers"] = "*"
+    response.headers["Access-Control-Expose-Headers"] = "*"
+    response.headers["Accept-Ranges"] = "bytes"
+    return response
+
 
 # Copy Thmanyah fonts to public/fonts so Remotion staticFile() can find them
 _base_dir = os.path.dirname(os.path.abspath(__file__))
